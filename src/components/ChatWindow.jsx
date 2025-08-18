@@ -54,11 +54,10 @@ export default function ChatWindow({ conversationId }) {
     if (!body || sending || !conversationId) return;
     setSending(true);
     try {
-      await sendMessage({
-        to: String(conversationId),
-        text: body,
-        conversationId: String(conversationId),
-      });
+     await sendMessage({
+  to: String(conversationId),
+  text: body,
+});
       setText("");
     } catch (e) {
       console.error(e);
