@@ -1,0 +1,5 @@
+@import "tailwindcss";
+
+/* fondo claro y reset simple */
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; background:#fff; color:#111; margin:0; }
