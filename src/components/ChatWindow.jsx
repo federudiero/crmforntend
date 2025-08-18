@@ -1,22 +1,29 @@
-// src/components/ChatWindow.jsx
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { db } from "../firebase";
 import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
 import { sendMessage } from "../services/api";
 
-// Formatea Firestore Timestamp o milisegundos
+/** Formatea Firestore Timestamp o milisegundos */
 function formatTs(ts) {
   const d = ts?.toDate ? ts.toDate() : (ts ? new Date(ts) : null);
   return d ? d.toLocaleString() : "";
 }
 
+/**
+ * ChatWindow
+ * - Se suscribe a conversations/{conversationId}/messages ordenado por fecha.
+ * - Al enviar, si el backend responde que la conversación real es otra
+ *   (por ejemplo normalizada a +549…), navega a ese hilo automáticamente.
+ */
 export default function ChatWindow({ conversationId }) {
   const [msgs, setMsgs] = useState([]);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const viewportRef = useRef(null);
+  const navigate = useNavigate();
 
-  // Suscripción a Firestore
+  // Suscripción a Firestore (siempre al ID que recibimos por props)
   useEffect(() => {
     if (!conversationId) {
       setMsgs([]);
@@ -40,9 +47,7 @@ export default function ChatWindow({ conversationId }) {
           viewportRef.current?.scrollTo({ top: 1e9, behavior: "smooth" });
         });
       },
-      (err) => {
-        console.error("onSnapshot error:", err);
-      }
+      (err) => console.error("onSnapshot error:", err)
     );
 
     return () => unsub();
@@ -50,14 +55,20 @@ export default function ChatWindow({ conversationId }) {
 
   // Enviar mensaje
   const doSend = async () => {
-    const body = text.trim();
+    const body = (text || "").trim();
     if (!body || sending || !conversationId) return;
     setSending(true);
     try {
-     await sendMessage({
-  to: String(conversationId),
-  text: body,
-});
+      // Mandamos al ID actual; el server decidirá si debe normalizar
+      const r = await sendMessage({ to: String(conversationId), text: body });
+
+      // Si el backend guardó en otro hilo (p.ej. +549…),
+      // redirigimos para que el historial sea consistente.
+      const serverConvId = r?.results?.[0]?.to;
+      if (serverConvId && serverConvId !== conversationId) {
+        navigate(`/app/${encodeURIComponent(serverConvId)}`, { replace: true });
+      }
+
       setText("");
     } catch (e) {
       console.error(e);
@@ -95,9 +106,7 @@ export default function ChatWindow({ conversationId }) {
             }
           >
             <div>{typeof m?.text === "string" ? m.text : JSON.stringify(m?.text || "")}</div>
-            <div className="text-[10px] opacity-60 mt-1">
-              {formatTs(m?.timestamp)}
-            </div>
+            <div className="text-[10px] opacity-60 mt-1">{formatTs(m?.timestamp)}</div>
           </div>
         ))}
       </div>
