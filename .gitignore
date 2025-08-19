@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# 🔒 Ignorar la clave de Firebase Admin SDK
+scripts/serviceAccountKey.json
+scripts/serviceAccountKey.json.json
