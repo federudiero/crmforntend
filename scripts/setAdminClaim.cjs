@@ -1,26 +1,29 @@
-// scripts/setAdminClaim.cjs
-const { initializeApp, cert } = require("firebase-admin/app");
-const { getAuth } = require("firebase-admin/auth");
+const admin = require("firebase-admin");
 const serviceAccount = require("./serviceAccountKey.json");
 
-// Inicializa Admin SDK con la service account
-initializeApp({ credential: cert(serviceAccount) });
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 
-// UID por argumento o variable de entorno
-const UID = process.argv[2] || process.env.ADMIN_UID;
+async function setAdmin(email) {
+  try {
+    const user = await admin.auth().getUserByEmail(email);
+    await admin.auth().setCustomUserClaims(user.uid, {
+      admin: true,
+      role: "admin",
+    });
+    console.log(`✅ Claims admin asignados al usuario: ${email}`);
+    process.exit(0);
+  } catch (err) {
+    console.error("❌ Error asignando claims:", err);
+    process.exit(1);
+  }
+}
 
-if (!UID) {
-  console.error("❌ Tenés que pasar un UID como argumento");
+const email = process.argv[2];
+if (!email) {
+  console.error("❌ Tenés que pasar un email");
   process.exit(1);
 }
 
-getAuth()
-  .setCustomUserClaims(UID, { admin: true, role: "admin" })
-  .then(() => {
-    console.log(`✅ Claim aplicada al usuario: ${UID}`);
-    console.log("ℹ️ Cerrá sesión en la app y volvé a entrar para refrescar el token.");
-  })
-  .catch((err) => {
-    console.error("❌ Error seteando claim:", err);
-    process.exit(1);
-  });
+setAdmin(email);
