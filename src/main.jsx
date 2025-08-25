@@ -1,4 +1,4 @@
-// src/main.jsx o src/index.jsx
+// src/main.jsx
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
@@ -6,15 +6,18 @@ import "./index.css";
 
 import LoginPage from "./pages/LoginPage.jsx";
 import RequireAuth from "./components/RequireAuth.jsx";
-import Home from "../src/pages/home.jsx"; // ← este es el nuevo componente unificado
+import Home from "./pages/Home.jsx"; // usa misma mayúscula que App.jsx
+
+// Asegura el tema DaisyUI (ya tienes los colores en index.css)
+document.documentElement.setAttribute("data-theme", "crm");
 
 const router = createBrowserRouter([
-  { path: "/", element: <LoginPage /> }, // LoginPage te lleva a /home
+  { path: "/", element: <LoginPage /> },
   {
-    element: <RequireAuth />,             // Protege rutas privadas
+    element: <RequireAuth />,
     children: [
-      { path: "/home", element: <Home /> },             // sin conversación abierta
-      { path: "/home/:convId", element: <Home /> },     // con conversación abierta
+      // una sola ruta que matchea /home y /home/:convId
+      { path: "/home/:convId?", element: <Home /> },
     ],
   },
 ]);

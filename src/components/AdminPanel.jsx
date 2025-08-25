@@ -1,7 +1,13 @@
+// src/components/AdminPanel.jsx
 import { useEffect, useMemo, useState } from "react";
 import { db } from "../firebase";
 import { collection, getDocs, doc, getDoc } from "firebase/firestore";
 import AdminVendors from "./AdminVendors.jsx";
+import LabelsAdmin from "./LabelsAdmin.jsx";
+import TemplatesPanel from "./TemplatesPanel.jsx";
+import CampaignsPanel from "./CampaignsPanel.jsx";
+import TasksPanel from "./TasksPanel.jsx";
+import DashboardPro from "./DashboardPro.jsx";
 
 /* ========================= Helpers fecha ========================= */
 function startOfDay(d) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
@@ -68,26 +74,23 @@ function BarChart({ data, height = 140, labelFmt = (k) => k }) {
 }
 
 export default function AdminPanel() {
+  // tabs soportados:
+  // "numbers" | "dashboard" | "templates" | "labels" | "campaigns" | "tasks" | "dashboardPro"
+  const [tab, setTab] = useState("numbers");
 
- const [tab, setTab] = useState("numbers"); 
-
- 
   const [loading, setLoading] = useState(false);
   const [convs,   setConvs]   = useState([]);
   const [vendors, setVendors] = useState([]);
 
- 
-  const [mode, setMode] = useState("7"); 
+  const [mode, setMode] = useState("7");
   const [from, setFrom] = useState(ymd(startOfDay(new Date(Date.now() - 6*86400000))));
   const [to,   setTo]   = useState(ymd(new Date()));
 
-  
   const [zoneFilter, setZoneFilter] = useState("(todas)");
-  const [labelFilter, setLabelFilter] = useState([]);  
-  const [agentFilter, setAgentFilter] = useState([]);   
-  const [q, setQ] = useState("");                       
+  const [labelFilter, setLabelFilter] = useState([]);
+  const [agentFilter, setAgentFilter] = useState([]);
+  const [q, setQ] = useState("");
 
-  
   const zonas = useMemo(() => {
     const set = new Set(
       vendors.filter(v => v.active)
@@ -97,6 +100,7 @@ export default function AdminPanel() {
     return ["(todas)", ...Array.from(set).sort()];
   }, [vendors]);
 
+  // Carga para tu dashboard actual (cuando se entra a "dashboard")
   useEffect(() => {
     if (tab !== "dashboard") return;
     (async () => {
@@ -104,16 +108,16 @@ export default function AdminPanel() {
       try {
         const cs = await getDocs(collection(db, "conversations"));
         const convRows = await Promise.all(
-  cs.docs.map(async (d) => {
-    let contact = null;
-    try {
-      const c = await getDoc(doc(db, "contacts", d.id));
-      contact = c.exists() ? c.data() : null;
-   } catch (e) { console.error(e); }
-   return { id: d.id, ...d.data(), contact };
- })
-);
- setConvs(convRows);
+          cs.docs.map(async (d) => {
+            let contact = null;
+            try {
+              const c = await getDoc(doc(db, "contacts", d.id));
+              contact = c.exists() ? c.data() : null;
+            } catch (e) { console.error(e); }
+            return { id: d.id, ...d.data(), contact };
+          })
+        );
+        setConvs(convRows);
 
         const vs = await getDocs(collection(db, "wabaNumbers"));
         setVendors(vs.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -123,7 +127,6 @@ export default function AdminPanel() {
     })();
   }, [tab]);
 
- 
   useEffect(() => {
     if (mode === "7") {
       const end = new Date();
@@ -139,7 +142,6 @@ export default function AdminPanel() {
       const end   = endOfDay(new Date(now.getFullYear(), now.getMonth()+1, 0));
       setFrom(ymd(start)); setTo(ymd(end));
     }
-   
   }, [mode]);
 
   // Rango en ms
@@ -147,7 +149,6 @@ export default function AdminPanel() {
     return [+startOfDay(new Date(from)), +endOfDay(new Date(to))];
   }, [from, to]);
 
- 
   const convsInRange = useMemo(() => {
     const [a,b] = range;
     return convs.filter(c => {
@@ -156,7 +157,6 @@ export default function AdminPanel() {
     });
   }, [convs, range]);
 
- 
   const vendorIndexByZone = useMemo(() => {
     const map = new Map();
     for (const v of vendors) {
@@ -170,7 +170,6 @@ export default function AdminPanel() {
     return map;
   }, [vendors]);
 
- 
   const convsByZone = useMemo(() => {
     if (zoneFilter === "(todas)") return convsInRange;
     const idx = vendorIndexByZone.get(zoneFilter);
@@ -186,7 +185,6 @@ export default function AdminPanel() {
     });
   }, [convsInRange, zoneFilter, vendorIndexByZone]);
 
-  
   const availableLabels = useMemo(() => {
     const set = new Set();
     for (const c of convsByZone) {
@@ -197,8 +195,7 @@ export default function AdminPanel() {
   }, [convsByZone]);
 
   const availableAgents = useMemo(() => {
-  
-    const map = new Map(); 
+    const map = new Map();
     for (const c of convsByZone) {
       const name = c.assignedToName || "";
       const uid  = c.assignedToUid  || "";
@@ -209,30 +206,24 @@ export default function AdminPanel() {
     return Array.from(map.keys()).sort((a,b) => a.localeCompare(b));
   }, [convsByZone]);
 
-  
   const convsByLabel = useMemo(() => {
     if (!labelFilter.length) return convsByZone;
     const set = new Set(labelFilter);
     return convsByZone.filter(c => {
       const ls = Array.isArray(c.labels) ? c.labels : [];
-      
       return ls.some(s => set.has(s));
     });
   }, [convsByZone, labelFilter]);
 
-
   const convsByAgent = useMemo(() => {
     if (!agentFilter.length) return convsByLabel;
-  
     const tokens = agentFilter.map(s => s.trim());
     return convsByLabel.filter(c => {
       const name = (c.assignedToName || "").trim();
       const uid  = (c.assignedToUid  || "").trim();
-      // match si cualquiera de los tokens coincide con name o uid
       return tokens.some(t => t === name || t === uid || t === `${name} (${uid})`);
     });
   }, [convsByLabel, agentFilter]);
-
 
   const convsFiltered = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -244,7 +235,6 @@ export default function AdminPanel() {
     });
   }, [convsByAgent, q]);
 
-  
   const kpis = useMemo(() => {
     const total = convsFiltered.length;
     const sinAsignar = convsFiltered.filter(c => !c.assignedToUid && !c.assignedToName).length;
@@ -264,9 +254,8 @@ export default function AdminPanel() {
     return { total, sinAsignar, porEtiqueta, porAgente };
   }, [convsFiltered]);
 
- 
   const seriePorDia = useMemo(() => {
-    const map = new Map(); 
+    const map = new Map();
     const [a,b] = range;
     for (let t=a; t<=b; t+=86400000) map.set(ymd(t), 0);
     for (const c of convsFiltered) {
@@ -277,7 +266,6 @@ export default function AdminPanel() {
     return Array.from(map.entries()).map(([k,v]) => ({ k, v }));
   }, [convsFiltered, range]);
 
- 
   const etiquetasData = useMemo(() =>
     Object.entries(kpis.porEtiqueta).sort((a,b) => b[1]-a[1]).slice(0,12).map(([k,v]) => ({ k, v }))
   , [kpis.porEtiqueta]);
@@ -286,7 +274,6 @@ export default function AdminPanel() {
     Object.entries(kpis.porAgente).sort((a,b) => b[1]-a[1]).slice(0,12).map(([k,v]) => ({ k, v }))
   , [kpis.porAgente]);
 
- 
   const vendedoresActivos = useMemo(() => vendors.filter(v => !!v.active), [vendors]);
   const vendedoresPorZona = useMemo(() => {
     const map = {};
@@ -298,7 +285,6 @@ export default function AdminPanel() {
     return map;
   }, [vendedoresActivos]);
 
- 
   const vendedoresPorZonaFiltrado = useMemo(() => {
     if (zoneFilter === "(todas)") return vendedoresPorZona;
     return { [zoneFilter]: vendedoresPorZona[zoneFilter] || [] };
@@ -310,12 +296,11 @@ export default function AdminPanel() {
       : (vendedoresPorZona[zoneFilter]?.length || 0);
   }, [zoneFilter, vendedoresActivos.length, vendedoresPorZona]);
 
-
   const zonaPart   = zoneFilter === "(todas)" ? "" : `_zona_${zoneFilter}`;
-const labelsPart = labelFilter.length ? `_labels_${labelFilter.join("+")}` : "";
-const agentsPart = agentFilter.length ? `_agentes_${agentFilter.length}` : "";
+  const labelsPart = labelFilter.length ? `_labels_${labelFilter.join("+")}` : "";
+  const agentsPart = agentFilter.length ? `_agentes_${agentFilter.length}` : "";
+  const suffix = `${from}_a_${to}${zonaPart}${labelsPart}${agentsPart}`;
 
-const suffix = `${from}_a_${to}${zonaPart}${labelsPart}${agentsPart}`;
   const doExportPorDia = () => {
     const csv = toCSV(seriePorDia.map(d => [d.k, d.v]), ["fecha", "conversaciones"]);
     downloadCSV(`conversaciones_por_dia_${suffix}.csv`, csv);
@@ -329,7 +314,6 @@ const suffix = `${from}_a_${to}${zonaPart}${labelsPart}${agentsPart}`;
     downloadCSV(`conversaciones_por_agente_${suffix}.csv`, csv);
   };
 
-
   const onMultiChange = (setter) => (e) => {
     const vals = Array.from(e.target.selectedOptions).map(o => o.value);
     setter(vals);
@@ -341,35 +325,68 @@ const suffix = `${from}_a_${to}${zonaPart}${labelsPart}${agentsPart}`;
     setQ("");
   };
 
+  // ────────────────────────────────────────────────────────────
+  // UI
   return (
-  
     <div className="p-4 space-y-4">
       <h2 className="text-lg font-bold">Panel de administración</h2>
 
-      <div className="flex gap-2">
+      {/* Tabs */}
+      <div className="flex flex-wrap gap-2">
         <button
-          className={
-            "px-3 py-1 border rounded " +
-            (tab === "numbers" ? "bg-black text-white" : "bg-white")
-          }
+          className={"px-3 py-1 border rounded " + (tab === "numbers" ? "bg-black text-white" : "bg-white")}
           onClick={() => setTab("numbers")}
         >
-          Números de vendedores
+          Números
         </button>
         <button
-          className={
-            "px-3 py-1 border rounded " +
-            (tab === "dashboard" ? "bg-black text-white" : "bg-white")
-          }
+          className={"px-3 py-1 border rounded " + (tab === "dashboard" ? "bg-black text-white" : "bg-white")}
           onClick={() => setTab("dashboard")}
         >
           Dashboard
         </button>
+        <button
+          className={"px-3 py-1 border rounded " + (tab === "templates" ? "bg-black text-white" : "bg-white")}
+          onClick={() => setTab("templates")}
+        >
+          Plantillas
+        </button>
+        <button
+          className={"px-3 py-1 border rounded " + (tab === "labels" ? "bg-black text-white" : "bg-white")}
+          onClick={() => setTab("labels")}
+        >
+          Etiquetas
+        </button>
+        {/* Nuevas pestañas */}
+        <button
+          className={"px-3 py-1 border rounded " + (tab === "campaigns" ? "bg-black text-white" : "bg-white")}
+          onClick={() => setTab("campaigns")}
+        >
+          Campañas
+        </button>
+        <button
+          className={"px-3 py-1 border rounded " + (tab === "tasks" ? "bg-black text-white" : "bg-white")}
+          onClick={() => setTab("tasks")}
+        >
+          Tareas
+        </button>
+        <button
+          className={"px-3 py-1 border rounded " + (tab === "dashboardPro" ? "bg-black text-white" : "bg-white")}
+          onClick={() => setTab("dashboardPro")}
+        >
+          Dashboard Pro
+        </button>
       </div>
 
-      {tab === "numbers" ? (
-        <AdminVendors />
-      ) : (
+      {/* Contenido por pestaña ya existente */}
+      {tab === "numbers" && <AdminVendors />}
+
+      {tab === "templates" && <TemplatesPanel />}
+
+      {tab === "labels" && <LabelsAdmin />}
+
+      {/* Tu Dashboard actual (lo conservo tal cual) */}
+      {tab === "dashboard" && (
         <div className="space-y-6">
           <div className="flex flex-col gap-3 p-3 border rounded">
             <div className="flex flex-wrap items-center gap-2">
@@ -607,9 +624,13 @@ const suffix = `${from}_a_${to}${zonaPart}${labelsPart}${agentsPart}`;
               ))}
             </div>
           </section>
-        </div> 
-      )} 
-    </div> 
+        </div>
+      )}
 
-);
+      {/* Contenido de NUEVAS pestañas */}
+      {tab === "campaigns" && <CampaignsPanel />}
+      {tab === "tasks" && <TasksPanel />}
+      {tab === "dashboardPro" && <DashboardPro />}
+    </div>
+  );
 }

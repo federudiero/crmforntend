@@ -1,4 +1,3 @@
-// src/components/LabelChips.jsx
 import React from "react";
 import { PRESET_LABELS } from "../lib/labels";
 
@@ -19,7 +18,6 @@ export default function LabelChips({ labels, slugs, className = "" }) {
   let items = [];
 
   if (Array.isArray(labels) && labels.length) {
-    // [{slug,name,color}] -> normalizamos por si faltan props
     items = labels.map((l) => {
       const slug = l.slug || l.id || String(l.name || "").toLowerCase();
       const preset = PRESET_MAP.get(slug);
@@ -30,7 +28,6 @@ export default function LabelChips({ labels, slugs, className = "" }) {
       };
     });
   } else if (Array.isArray(slugs) && slugs.length) {
-    // ["cliente-vip", "vendido", ...]
     items = slugs.map((s) => {
       const slug = String(s);
       const preset = PRESET_MAP.get(slug);

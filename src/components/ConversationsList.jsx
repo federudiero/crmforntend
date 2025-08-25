@@ -44,7 +44,6 @@ export default function ConversationsList({ activeId, onSelect }) {
       async (snap) => {
         const rows = await Promise.all(
           snap.docs.map(async (d) => {
-            // Info del contacto (opcional)
             let contact = null;
             try {
               const c = await getDoc(doc(db, "contacts", d.id));
@@ -64,9 +63,7 @@ export default function ConversationsList({ activeId, onSelect }) {
 
   // Helpers
   const isStarred = (c) =>
-    Array.isArray(c.stars) && user?.uid
-      ? c.stars.includes(user.uid)
-      : false;
+    Array.isArray(c.stars) && user?.uid ? c.stars.includes(user.uid) : false;
 
   // Acciones rápidas
   const toggleStar = async (c) => {
@@ -131,7 +128,7 @@ export default function ConversationsList({ activeId, onSelect }) {
     });
   }, [items, search]);
 
-  // Filtros por pestaña
+  // Filtros por pestaña (para lista normal)
   const filtered = useMemo(() => {
     const base = filteredByText;
     if (tab === "mios" && user?.uid) {
@@ -145,10 +142,21 @@ export default function ConversationsList({ activeId, onSelect }) {
     return base;
   }, [filteredByText, tab, user?.uid]);
 
-  // Índice por etiqueta
+  // =========================
+  //   ETIQUETAS POR VENDEDOR
+  // =========================
+  // En la vista "Por etiqueta", construimos el índice SOLO
+  // con conversaciones asignadas al usuario actual.
+  const myForLabels = useMemo(() => {
+    if (!user?.uid) return [];
+    return filteredByText.filter((c) => c.assignedToUid === user.uid);
+  }, [filteredByText, user?.uid]);
+
+  // Índice por etiqueta (solo "mis" conversaciones)
   const labelsIndex = useMemo(() => {
     const map = new Map();
-    for (const c of filteredByText) {
+    const source = myForLabels; // <— clave del cambio
+    for (const c of source) {
       const slugs =
         Array.isArray(c.labels) && c.labels.length ? c.labels : ["__none__"];
       for (const s of slugs) {
@@ -156,6 +164,7 @@ export default function ConversationsList({ activeId, onSelect }) {
         map.get(s).push(c);
       }
     }
+    // ordenar cada grupo por actividad
     for (const [, arr] of map) {
       arr.sort((a, b) => {
         const ta =
@@ -168,7 +177,7 @@ export default function ConversationsList({ activeId, onSelect }) {
       });
     }
     return map;
-  }, [filteredByText]);
+  }, [myForLabels]);
 
   const sortedGroups = useMemo(() => {
     const entries = Array.from(labelsIndex.entries());
@@ -182,8 +191,16 @@ export default function ConversationsList({ activeId, onSelect }) {
     return entries;
   }, [labelsIndex]);
 
+  // Abrir sólo si no está tomada por otro
+  const canOpen = (c) =>
+    !c.assignedToUid || c.assignedToUid === user?.uid;
+
+  const tryOpen = (c) => {
+    if (canOpen(c)) onSelect?.(c.id);
+  };
+
   return (
-    <div className="flex flex-col min-h-0 border-r">
+    <div className="flex flex-col min-h-0 border-r bg-base-100">
       {/* Header: tabs + búsqueda */}
       <div className="flex items-center gap-2 p-2">
         <div className="flex overflow-hidden border rounded">
@@ -191,13 +208,15 @@ export default function ConversationsList({ activeId, onSelect }) {
             ["todos", "Todos"],
             ["mios", "Mis chats"],
             ["fav", "Favoritos"],
-            ["etiquetas", "Por etiqueta"],
+            ["etiquetas", "Por etiqueta"], // ← esta ahora es "mis etiquetas"
           ].map(([key, label]) => (
             <button
               key={key}
               className={
                 "px-3 py-1 text-sm " +
-                (tab === key ? "bg-black text-white" : "bg-white")
+                (tab === key
+                  ? "bg-primary text-white"
+                  : "bg-base-100 hover:bg-base-200")
               }
               onClick={() => setTab(key)}
               title={label}
@@ -208,7 +227,7 @@ export default function ConversationsList({ activeId, onSelect }) {
         </div>
 
         <input
-          className="flex-1 p-2 border rounded"
+          className="flex-1 input input-sm input-bordered"
           placeholder="Buscar nombre o número…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -222,7 +241,8 @@ export default function ConversationsList({ activeId, onSelect }) {
             {filtered.map((c) => {
               const isActive = String(c.id) === String(activeId || "");
               const slugs = Array.isArray(c.labels) ? c.labels : [];
-              const assignedToMe = user?.uid && c.assignedToUid === user.uid;
+              const assignedToMe = user?.uid && c.assignedToUid === user?.uid;
+              const lockedByOther = !!c.assignedToUid && !assignedToMe;
               const assigned =
                 c.assignedToName ||
                 (c.assignedToUid ? "Asignado" : "No asignado");
@@ -231,143 +251,183 @@ export default function ConversationsList({ activeId, onSelect }) {
                 <div
                   key={c.id}
                   className={
-                    "px-3 py-2 border-t hover:bg-gray-50 " +
-                    (isActive ? "bg-gray-100" : "bg-white")
+                    "border-t bg-base-100 px-3 py-2 " +
+                    (isActive ? "bg-base-200 " : "hover:bg-base-200/60 ") +
+                    (lockedByOther ? "opacity-60 cursor-not-allowed " : "")
+                  }
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => tryOpen(c)}
+                  onKeyDown={(e) => {
+                    if ((e.key === "Enter" || e.key === " ") && canOpen(c))
+                      onSelect?.(c.id);
+                  }}
+                  title={
+                    lockedByOther
+                      ? `Asignada a ${c.assignedToName || "otro agente"}`
+                      : c.id
                   }
                 >
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => onSelect?.(c.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") onSelect?.(c.id);
-                    }}
-                    className="w-full text-left"
-                    title={c.id}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="font-mono text-sm break-all truncate">
-                          {c.contact?.name || c.id}
-                        </div>
-                        <div className="text-[11px] text-gray-500">
-                          {formatShort(c.lastMessageAt)}
-                        </div>
-                        <div className="mt-1">
-                          <LabelChips slugs={slugs} />
-                        </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-mono text-sm truncate">
+                        {c.contact?.name || c.id}
                       </div>
+                      <div className="text-[11px] text-gray-500">
+                        {formatShort(c.lastMessageAt)}
+                      </div>
+                      <div className="mt-1">
+                        <LabelChips slugs={slugs} />
+                      </div>
+                    </div>
 
-                      <div className="flex items-center gap-2 shrink-0">
-                        {assignedToMe ? (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              unassign(c);
-                            }}
-                            className="btn btn-xs"
-                            title="Desasignarme"
-                          >
-                            Yo ✓
-                          </button>
-                        ) : c.assignedToUid ? (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              assignToMe(c);
-                            }}
-                            className="btn btn-xs"
-                            title={`Asignada a ${
-                              c.assignedToName || "otro"
-                            }. Tomar conversación`}
-                          >
-                            Tomar
-                          </button>
-                        ) : (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              assignToMe(c);
-                            }}
-                            className="btn btn-xs"
-                            title="Asignarme esta conversación"
-                          >
-                            Asignarme
-                          </button>
-                        )}
+                    <div className="flex items-center gap-2 shrink-0">
+                      {assignedToMe ? (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); unassign(c); }}
+                          className="border-0 btn btn-xs"
+                          style={{ backgroundColor: "var(--color-error, #ef4444)", color: "#fff" }}
+                          title="Desasignarme"
+                        >
+                          Yo ✓
+                        </button>
+                      ) : c.assignedToUid ? (
+                        <button
+  className="cursor-not-allowed btn btn-xs"
+  style={{
+    backgroundColor: "var(--color-error, #ef4444)",
+    borderColor: "var(--color-error, #ef4444)",
+    color: "#fff",
+  }}
+  disabled
+  onClick={(e) => e.stopPropagation()}
+  title={`Asignada a ${c.assignedToName || "otro agente"}`}
+>
+  Ocupada
+</button>
 
+                      ) : (
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            toggleStar(c);
+                            assignToMe(c);
                           }}
-                          className="text-xl leading-none"
-                          title={
-                            isStarred(c)
-                              ? "Quitar de favoritos"
-                              : "Agregar a favoritos"
-                          }
+                          className="btn btn-xs btn-primary"
+                          title="Asignarme esta conversación"
                         >
-                          {isStarred(c) ? "★" : "☆"}
+                          Asignarme
                         </button>
-                      </div>
-                    </div>
-
-                    <div className="mt-1 text-[11px] text-gray-600">
-                      {c.assignedToUid ? (
-                        <span>
-                          Asignado a{" "}
-                          <b>
-                            {c.assignedToUid === user?.uid
-                              ? "mí"
-                              : c.assignedToName || c.assignedToUid}
-                          </b>
-                        </span>
-                      ) : (
-                        <span className="italic text-gray-400">{assigned}</span>
                       )}
+
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleStar(c);
+                        }}
+                        className={
+                          "text-xl leading-none " +
+                          (isStarred(c)
+                            ? "text-yellow-500"
+                            : "text-gray-400 hover:text-gray-600")
+                        }
+                        title={
+                          isStarred(c)
+                            ? "Quitar de favoritos"
+                            : "Agregar a favoritos"
+                        }
+                      >
+                        {isStarred(c) ? "★" : "☆"}
+                      </button>
                     </div>
+                  </div>
+
+                  <div className="mt-1 text-[11px] text-gray-600">
+                    {c.assignedToUid ? (
+                      <span>
+                        Asignado a{" "}
+                        <b>
+                          {c.assignedToUid === user?.uid
+                            ? "mí"
+                            : c.assignedToName || c.assignedToUid}
+                        </b>
+                      </span>
+                    ) : (
+                      <span className="italic text-gray-400">{assigned}</span>
+                    )}
                   </div>
                 </div>
               );
             })}
           </>
         ) : (
-          <>
-            {/* ===== Vista por etiqueta ===== */}
-            <div className="flex min-h-0">
-              {/* Sidebar */}
-              <aside className="overflow-y-auto border-r w-52 shrink-0">
-                <div className="p-2 border-b">
-                  <button
-                    onClick={() => setSelectedLabel("__all__")}
-                    className={
-                      "w-full text-left px-2 py-1 rounded " +
-                      (selectedLabel === "__all__"
-                        ? "bg-black text-white"
-                        : "hover:bg-gray-100")
-                    }
-                    title="Ver todas (agrupadas)"
-                  >
-                    Todas las etiquetas
-                  </button>
-                </div>
-                <ul className="p-2 space-y-1">
+          // ===== Vista por etiqueta (solo MIS etiquetas) =====
+          <div className="flex min-h-0">
+            {/* Sidebar */}
+            <aside className="w-56 overflow-y-auto border-r shrink-0">
+              <div className="p-2 border-b">
+                <button
+                  onClick={() => setSelectedLabel("__all__")}
+                  className={
+                    "w-full rounded px-2 py-1 text-left " +
+                    (selectedLabel === "__all__"
+                      ? "bg-primary text-white"
+                      : "hover:bg-base-200")
+                  }
+                  title="Ver todas (mis etiquetas agrupadas)"
+                >
+                  Mis etiquetas
+                </button>
+              </div>
+
+              <ul className="p-2 space-y-1">
+                {sortedGroups.map(([slug, arr]) => {
+                  const isNone = slug === "__none__";
+                  return (
+                    <li key={slug}>
+                      <button
+                        onClick={() => setSelectedLabel(slug)}
+                        className={
+                          "flex w-full items-center justify-between gap-2 rounded px-2 py-1 " +
+                          (selectedLabel === slug
+                            ? "bg-primary text-white"
+                            : "hover:bg-base-200")
+                        }
+                        title={isNone ? "Sin etiqueta" : slug}
+                      >
+                        <span className="flex items-center gap-2 truncate">
+                          {isNone ? (
+                            <span className="text-xs badge badge-neutral">
+                              Sin etiqueta
+                            </span>
+                          ) : (
+                            <LabelChips slugs={[slug]} />
+                          )}
+                        </span>
+                        <span className="text-xs opacity-70">
+                          {arr.length}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+                {sortedGroups.length === 0 && (
+                  <li className="px-2 text-sm text-gray-500">
+                    (No tenés conversaciones asignadas)
+                  </li>
+                )}
+              </ul>
+            </aside>
+
+            {/* Contenido derecha */}
+            <section className="flex-1 overflow-y-auto">
+              {selectedLabel === "__all__" ? (
+                <div className="divide-y">
                   {sortedGroups.map(([slug, arr]) => {
                     const isNone = slug === "__none__";
                     return (
-                      <li key={slug}>
-                        <button
-                          onClick={() => setSelectedLabel(slug)}
-                          className={
-                            "w-full flex items-center justify-between gap-2 px-2 py-1 rounded " +
-                            (selectedLabel === slug
-                              ? "bg-black text-white"
-                              : "hover:bg-gray-100")
-                          }
-                          title={isNone ? "Sin etiqueta" : slug}
-                        >
-                          <span className="flex items-center gap-2 truncate">
+                      <details key={slug} className="group">
+                        <summary className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-base-200">
+                          <div className="flex items-center gap-2">
                             {isNone ? (
                               <span className="text-xs badge badge-neutral">
                                 Sin etiqueta
@@ -375,286 +435,264 @@ export default function ConversationsList({ activeId, onSelect }) {
                             ) : (
                               <LabelChips slugs={[slug]} />
                             )}
-                          </span>
-                          <span className="text-xs opacity-70">
+                          </div>
+                          <span className="text-xs text-gray-500">
                             {arr.length}
                           </span>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </aside>
-
-              {/* Contenido derecha */}
-              <section className="flex-1 overflow-y-auto">
-                {selectedLabel === "__all__" ? (
-                  <div className="divide-y">
-                    {sortedGroups.map(([slug, arr]) => {
-                      const isNone = slug === "__none__";
-                      return (
-                        <details key={slug} className="group">
-                          <summary className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-gray-50">
-                            <div className="flex items-center gap-2">
-                              {isNone ? (
-                                <span className="text-xs badge badge-neutral">
-                                  Sin etiqueta
-                                </span>
-                              ) : (
-                                <LabelChips slugs={[slug]} />
-                              )}
-                            </div>
-                            <span className="text-xs text-gray-500">
-                              {arr.length}
-                            </span>
-                          </summary>
-                          <div className="p-2 space-y-1">
-                            {arr.map((c) => {
-                              const isActive =
-                                String(c.id) === String(activeId || "");
-                              const slugs = Array.isArray(c.labels)
-                                ? c.labels
-                                : [];
-                              const assignedToMe =
-                                user?.uid && c.assignedToUid === user?.uid;
-                              const assigned =
-                                c.assignedToName ||
-                                (c.assignedToUid ? "Asignado" : "No asignado");
-                              return (
-                                <div
-                                  key={c.id}
-                                  className={
-                                    "px-3 py-2 border rounded hover:bg-gray-50 " +
-                                    (isActive
-                                      ? "bg-gray-100"
-                                      : "bg-white")
-                                  }
-                                >
-                                  <div
-                                    role="button"
-                                    tabIndex={0}
-                                    onClick={() => onSelect?.(c.id)}
-                                    onKeyDown={(e) => {
-                                      if (
-                                        e.key === "Enter" ||
-                                        e.key === " "
-                                      )
-                                        onSelect?.(c.id);
-                                    }}
-                                    className="w-full text-left"
-                                    title={c.id}
-                                  >
-                                    <div className="flex items-center justify-between gap-2">
-                                      <div className="min-w-0">
-                                        <div className="font-mono text-sm break-all truncate">
-                                          {c.contact?.name || c.id}
-                                        </div>
-                                        <div className="text-[11px] text-gray-500">
-                                          {formatShort(c.lastMessageAt)}
-                                        </div>
-                                        <div className="mt-1">
-                                          <LabelChips slugs={slugs} />
-                                        </div>
-                                      </div>
-                                      <div className="flex items-center gap-2 shrink-0">
-                                        {assignedToMe ? (
-                                          <button
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              unassign(c);
-                                            }}
-                                            className="btn btn-xs"
-                                            title="Desasignarme"
-                                          >
-                                            Yo ✓
-                                          </button>
-                                        ) : c.assignedToUid ? (
-                                          <button
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              assignToMe(c);
-                                            }}
-                                            className="btn btn-xs"
-                                            title={`Asignada a ${
-                                              c.assignedToName || "otro"
-                                            }. Tomar conversación`}
-                                          >
-                                            Tomar
-                                          </button>
-                                        ) : (
-                                          <button
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              assignToMe(c);
-                                            }}
-                                            className="btn btn-xs"
-                                            title="Asignarme esta conversación"
-                                          >
-                                            Asignarme
-                                          </button>
-                                        )}
-                                        <button
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            toggleStar(c);
-                                          }}
-                                          className="text-xl leading-none"
-                                          title={
-                                            isStarred(c)
-                                              ? "Quitar de favoritos"
-                                              : "Agregar a favoritos"
-                                          }
-                                        >
-                                          {isStarred(c) ? "★" : "☆"}
-                                        </button>
-                                      </div>
+                        </summary>
+                        <div className="p-2 space-y-1">
+                          {arr.map((c) => {
+                            const isActive =
+                              String(c.id) === String(activeId || "");
+                            const slugs = Array.isArray(c.labels)
+                              ? c.labels
+                              : [];
+                            const assignedToMe =
+                              user?.uid && c.assignedToUid === user?.uid;
+                            const lockedByOther =
+                              !!c.assignedToUid && !assignedToMe;
+                            const assigned =
+                              c.assignedToName ||
+                              (c.assignedToUid ? "Asignado" : "No asignado");
+                            return (
+                              <div
+                                key={c.id}
+                                className={
+                                  "rounded border bg-base-100 px-3 py-2 " +
+                                  (isActive ? "bg-base-200 " : "hover:bg-base-200/60 ") +
+                                  (lockedByOther
+                                    ? "opacity-60 cursor-not-allowed "
+                                    : "")
+                                }
+                                role="button"
+                                tabIndex={0}
+                                onClick={() => tryOpen(c)}
+                                onKeyDown={(e) => {
+                                  if (
+                                    (e.key === "Enter" || e.key === " ") &&
+                                    canOpen(c)
+                                  )
+                                    onSelect?.(c.id);
+                                }}
+                                title={
+                                  lockedByOther
+                                    ? `Asignada a ${
+                                        c.assignedToName || "otro agente"
+                                      }`
+                                    : c.id
+                                }
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="min-w-0">
+                                    <div className="font-mono text-sm truncate">
+                                      {c.contact?.name || c.id}
                                     </div>
-                                    <div className="mt-1 text-[11px] text-gray-600">
-                                      {c.assignedToUid ? (
-                                        <span>
-                                          Asignado a{" "}
-                                          <b>
-                                            {c.assignedToUid === user?.uid
-                                              ? "mí"
-                                              : c.assignedToName ||
-                                                c.assignedToUid}
-                                          </b>
-                                        </span>
-                                      ) : (
-                                        <span className="italic text-gray-400">
-                                          {assigned}
-                                        </span>
-                                      )}
+                                    <div className="text-[11px] text-gray-500">
+                                      {formatShort(c.lastMessageAt)}
+                                    </div>
+                                    <div className="mt-1">
+                                      <LabelChips slugs={slugs} />
                                     </div>
                                   </div>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    {assignedToMe ? (
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); unassign(c); }}
+                                        className="border-0 btn btn-xs"
+                                        style={{ backgroundColor: "var(--color-error, #ef4444)", color: "#fff" }}
+                                        title="Desasignarme"
+                                      >
+                                        Yo ✓
+                                      </button>
+                                    ) : c.assignedToUid ? (
+                                      <button
+                                        className="btn btn-xs btn-disabled"
+                                        disabled
+                                        onClick={(e) => e.stopPropagation()}
+                                        title={`Asignada a ${
+                                          c.assignedToName || "otro agente"
+                                        }`}
+                                      >
+                                        Ocupada
+                                      </button>
+                                    ) : (
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          assignToMe(c);
+                                        }}
+                                        className="btn btn-xs btn-primary"
+                                        title="Asignarme esta conversación"
+                                      >
+                                        Asignarme
+                                      </button>
+                                    )}
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        toggleStar(c);
+                                      }}
+                                      className={
+                                        "text-xl leading-none " +
+                                        (isStarred(c)
+                                          ? "text-yellow-500"
+                                          : "text-gray-400 hover:text-gray-600")
+                                      }
+                                      title={
+                                        isStarred(c)
+                                          ? "Quitar de favoritos"
+                                          : "Agregar a favoritos"
+                                      }
+                                    >
+                                      {isStarred(c) ? "★" : "☆"}
+                                    </button>
+                                  </div>
                                 </div>
-                              );
-                            })}
+                                <div className="mt-1 text-[11px] text-gray-600">
+                                  {c.assignedToUid ? (
+                                    <span>
+                                      Asignado a{" "}
+                                      <b>
+                                        {c.assignedToUid === user?.uid
+                                          ? "mí"
+                                          : c.assignedToName ||
+                                            c.assignedToUid}
+                                      </b>
+                                    </span>
+                                  ) : (
+                                    <span className="italic text-gray-400">
+                                      {assigned}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </details>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="p-2 space-y-2">
+                  {(labelsIndex.get(selectedLabel) || []).map((c) => {
+                    const isActive = String(c.id) === String(activeId || "");
+                    const slugs = Array.isArray(c.labels) ? c.labels : [];
+                    const assignedToMe =
+                      user?.uid && c.assignedToUid === user?.uid;
+                    const lockedByOther =
+                      !!c.assignedToUid && !assignedToMe;
+                    const assigned =
+                      c.assignedToName ||
+                      (c.assignedToUid ? "Asignado" : "No asignado");
+                    return (
+                      <div
+                        key={c.id}
+                        className={
+                          "rounded border bg-base-100 px-3 py-2 " +
+                          (isActive ? "bg-base-200 " : "hover:bg-base-200/60 ") +
+                          (lockedByOther ? "opacity-60 cursor-not-allowed " : "")
+                        }
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => tryOpen(c)}
+                        onKeyDown={(e) => {
+                          if ((e.key === "Enter" || e.key === " ") && canOpen(c))
+                            onSelect?.(c.id);
+                        }}
+                        title={
+                          lockedByOther
+                            ? `Asignada a ${c.assignedToName || "otro agente"}`
+                            : c.id
+                        }
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="font-mono text-sm truncate">
+                              {c.contact?.name || c.id}
+                            </div>
+                            <div className="text-[11px] text-gray-500">
+                              {formatShort(c.lastMessageAt)}
+                            </div>
+                            <div className="mt-1">
+                              <LabelChips slugs={slugs} />
+                            </div>
                           </div>
-                        </details>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="p-2 space-y-2">
-                    {(labelsIndex.get(selectedLabel) || []).map((c) => {
-                      const isActive =
-                        String(c.id) === String(activeId || "");
-                      const slugs = Array.isArray(c.labels) ? c.labels : [];
-                      const assignedToMe =
-                        user?.uid && c.assignedToUid === user?.uid;
-                      const assigned =
-                        c.assignedToName ||
-                        (c.assignedToUid ? "Asignado" : "No asignado");
-                      return (
-                        <div
-                          key={c.id}
-                          className={
-                            "px-3 py-2 border rounded hover:bg-gray-50 " +
-                            (isActive ? "bg-gray-100" : "bg-white")
-                          }
-                        >
-                          <div
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => onSelect?.(c.id)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" || e.key === " ")
-                                onSelect?.(c.id);
-                            }}
-                            className="w-full text-left"
-                            title={c.id}
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="min-w-0">
-                                <div className="font-mono text-sm break-all truncate">
-                                  {c.contact?.name || c.id}
-                                </div>
-                                <div className="text-[11px] text-gray-500">
-                                  {formatShort(c.lastMessageAt)}
-                                </div>
-                                <div className="mt-1">
-                                  <LabelChips slugs={slugs} />
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-2 shrink-0">
-                                {assignedToMe ? (
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      unassign(c);
-                                    }}
-                                    className="btn btn-xs"
-                                    title="Desasignarme"
-                                  >
-                                    Yo ✓
-                                  </button>
-                                ) : c.assignedToUid ? (
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      assignToMe(c);
-                                    }}
-                                    className="btn btn-xs"
-                                    title={`Asignada a ${
-                                      c.assignedToName || "otro"
-                                    }. Tomar conversación`}
-                                  >
-                                    Tomar
-                                  </button>
-                                ) : (
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      assignToMe(c);
-                                    }}
-                                    className="btn btn-xs"
-                                    title="Asignarme esta conversación"
-                                  >
-                                    Asignarme
-                                  </button>
-                                )}
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    toggleStar(c);
-                                  }}
-                                  className="text-xl leading-none"
-                                  title={
-                                    isStarred(c)
-                                      ? "Quitar de favoritos"
-                                      : "Agregar a favoritos"
-                                  }
-                                >
-                                  {isStarred(c) ? "★" : "☆"}
-                                </button>
-                              </div>
-                            </div>
-                            <div className="mt-1 text-[11px] text-gray-600">
-                              {c.assignedToUid ? (
-                                <span>
-                                  Asignado a{" "}
-                                  <b>
-                                    {c.assignedToUid === user?.uid
-                                      ? "mí"
-                                      : c.assignedToName || c.assignedToUid}
-                                  </b>
-                                </span>
-                              ) : (
-                                <span className="italic text-gray-400">
-                                  {assigned}
-                                </span>
-                              )}
-                            </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            {assignedToMe ? (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); unassign(c); }}
+                                className="border-0 btn btn-xs"
+                                style={{ backgroundColor: "var(--color-error, #ef4444)", color: "#fff" }}
+                                title="Desasignarme"
+                              >
+                                Yo ✓
+                              </button>
+                            ) : c.assignedToUid ? (
+                              <button
+                                className="btn btn-xs btn-disabled"
+                                disabled
+                                onClick={(e) => e.stopPropagation()}
+                                title={`Asignada a ${
+                                  c.assignedToName || "otro agente"
+                                }`}
+                              >
+                                Ocupada
+                              </button>
+                            ) : (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  assignToMe(c);
+                                }}
+                                className="btn btn-xs btn-primary"
+                                title="Asignarme esta conversación"
+                              >
+                                Asignarme
+                              </button>
+                            )}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleStar(c);
+                              }}
+                              className={
+                                "text-xl leading-none " +
+                                (isStarred(c)
+                                  ? "text-yellow-500"
+                                  : "text-gray-400 hover:text-gray-600")
+                              }
+                              title={
+                                isStarred(c)
+                                  ? "Quitar de favoritos"
+                                  : "Agregar a favoritos"
+                              }
+                            >
+                              {isStarred(c) ? "★" : "☆"}
+                            </button>
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </section>
-            </div>
-          </>
+                        <div className="mt-1 text-[11px] text-gray-600">
+                          {c.assignedToUid ? (
+                            <span>
+                              Asignado a{" "}
+                              <b>
+                                {c.assignedToUid === user?.uid
+                                  ? "mí"
+                                  : c.assignedToName || c.assignedToUid}
+                              </b>
+                            </span>
+                          ) : (
+                            <span className="italic text-gray-400">{assigned}</span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          </div>
         )}
       </div>
     </div>

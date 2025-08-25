@@ -1,5 +1,31 @@
+/* Tailwind v4 + DaisyUI v5 */
 @import "tailwindcss";
+@plugin "daisyui" {
+  /* habilitás los temas que quieras usar */
+  themes: light --default, dark --prefersdark, crm;
+}
 
-/* fondo claro y reset simple */
+/* Definí tu tema "crm" (colores iguales a los que veníamos usando) */
+@plugin "daisyui/theme" {
+  name: "crm";
+  /* color de UI del navegador (opcional): light/dark */
+  color-scheme: light;
+
+  /* variables de color del tema */
+  --color-primary:   #2563eb;
+  --color-secondary: #9333ea;
+  --color-accent:    #22c55e;
+  --color-neutral:   #1f2937;
+
+  --color-base-100:  #949494;
+  --color-base-200:  #949494;
+
+  --color-info:      #0ea5e9;
+  --color-success:   #16a34a;
+  --color-warning:   #f59e0b;
+  --color-error:     #ef4444;
+}
+
+/* Tu reset simple (dejalo igual) */
 * { box-sizing: border-box; }
-html, body, #root { height: 100%; background:#fff; color:#111; margin:0; }
+html, body, #root { height: 100%; background:#949494; color:#111; margin:0; }
