@@ -1,31 +1,71 @@
 /* Tailwind v4 + DaisyUI v5 */
 @import "tailwindcss";
+
+/* Habilitá daisyui y definí 2 temas: claro y oscuro opcional */
 @plugin "daisyui" {
-  /* habilitás los temas que quieras usar */
-  themes: light --default, dark --prefersdark, crm;
+  themes: crm --default, crm-dark;
 }
 
-/* Definí tu tema "crm" (colores iguales a los que veníamos usando) */
+/* ===== Tema claro ===== */
 @plugin "daisyui/theme" {
   name: "crm";
-  /* color de UI del navegador (opcional): light/dark */
   color-scheme: light;
 
-  /* variables de color del tema */
-  --color-primary:   #2563eb;
-  --color-secondary: #9333ea;
-  --color-accent:    #22c55e;
-  --color-neutral:   #1f2937;
+  /* Colores de marca */
+  --color-primary:           #2563eb; /* azul */
+  --color-primary-content:   #ffffff;
 
-  --color-base-100:  #949494;
-  --color-base-200:  #949494;
+  --color-secondary:         #0ea5e9; /* celeste */
+  --color-secondary-content: #0b1220;
 
-  --color-info:      #0ea5e9;
-  --color-success:   #16a34a;
-  --color-warning:   #f59e0b;
-  --color-error:     #ef4444;
+  --color-accent:            #10b981; /* verde */
+  --color-accent-content:    #062319;
+
+  /* Neutrales y fondos */
+  --color-neutral:           #0f172a; /* slate-900 p/ textos fuertes */
+  --color-base-100:          #ffffff; /* fondo tarjetas/paneles */
+  --color-base-200:          #f1f5f9; /* hover / listas */
+  --color-base-300:          #e5e7eb;
+
+  /* Estado */
+  --color-info:              #38bdf8;
+  --color-success:           #16a34a;
+  --color-warning:           #f59e0b;
+  --color-error:             #ef4444;
+
+  /* Radios y sombras más “suaves” */
+  --radius-box: 14px;
+  --radius-btn: 12px;
+  --radius-field: 12px;
 }
 
-/* Tu reset simple (dejalo igual) */
+
+@plugin "daisyui/theme" {
+  name: "crm-dark";
+  color-scheme: dark;
+
+  --color-primary:           #60a5fa;
+  --color-primary-content:   #0a1220;
+
+  --color-secondary:         #22d3ee;
+  --color-accent:            #34d399;
+
+  --color-neutral:           #e5e7eb;
+  --color-base-100:          #0b1220;
+  --color-base-200:          #111828;
+  --color-base-300:          #1f2937;
+
+  --color-info:              #38bdf8;
+  --color-success:           #4ade80;
+  --color-warning:           #fbbf24;
+  --color-error:             #f87171;
+
+  --radius-box: 14px;
+  --radius-btn: 12px;
+  --radius-field: 12px;
+}
+
+
 * { box-sizing: border-box; }
-html, body, #root { height: 100%; background:#949494; color:#111; margin:0; }
+html, body, #root { height: 100%; margin: 0; }
+body { font-family: ui-sans-serif, system-ui, -apple-system, "Inter", "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif; }

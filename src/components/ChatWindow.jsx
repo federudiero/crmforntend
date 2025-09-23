@@ -22,6 +22,10 @@ import QuickRepliesBar from "./QuickRepliesBar.jsx";
 import ClientProfile from "./ClientProfile.jsx";
 import TagsMenu from "./TagsMenu.jsx";
 
+// ⭐ Destacados
+import StarButton from "./StarButton.jsx";
+import ChatDestacadosPanel from "./ChatDestacadosPanel.jsx";
+
 function formatTs(ts) {
   const d = ts?.toDate ? ts.toDate() : (ts ? new Date(ts) : null);
   return d ? d.toLocaleString() : "";
@@ -47,6 +51,9 @@ export default function ChatWindow({ conversationId }) {
   // UI
   const [showProfile, setShowProfile] = useState(false);
   const [showTags, setShowTags] = useState(false);
+
+  // ⭐ pestañas (chat | destacados)
+  const [tab, setTab] = useState("chat");
 
   const viewportRef = useRef(null);
   const textareaRef = useRef(null);
@@ -87,14 +94,16 @@ export default function ChatWindow({ conversationId }) {
       (snap) => {
         const arr = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         setMsgs(arr);
-        requestAnimationFrame(() => {
-          viewportRef.current?.scrollTo({ top: 1e9, behavior: "smooth" });
-        });
+        if (tab === "chat") {
+          requestAnimationFrame(() => {
+            viewportRef.current?.scrollTo({ top: 1e9, behavior: "smooth" });
+          });
+        }
       },
       (err) => console.error("onSnapshot(messages) error:", err)
     );
     return () => unsub();
-  }, [conversationId]);
+  }, [conversationId, tab]);
 
   // meta conversación
   useEffect(() => {
@@ -212,9 +221,9 @@ export default function ChatWindow({ conversationId }) {
   );
 
   return (
-    <div className="flex flex-col h-full text-black bg-base-100">
+    <div className="flex flex-col h-full text-black bg-[#F6FBF7]">
       {/* Header (2 filas) */}
-      <header className="sticky top-0 z-40 border-b bg-base-100/90 backdrop-blur">
+      <header className="sticky top-0 z-40 border-b bg-[#E8F5E9]/90 border-[#CDEBD6] backdrop-blur">
         <div className="px-4 pt-2 pb-2 space-y-2">
           {/* Fila 1: título + acciones */}
           <div className="flex items-center justify-between gap-2">
@@ -237,14 +246,14 @@ export default function ChatWindow({ conversationId }) {
                 context={templateContext}
               />
               <button
-                className="text-black btn btn-sm"
+                className="text-black btn btn-sm bg-white hover:bg-[#F1FAF3] border border-[#CDEBD6]"
                 onClick={() => setShowTags(true)}
                 title="Etiquetar conversación"
               >
                 Etiquetar
               </button>
               <button
-                className="text-black btn btn-sm"
+                className="text-black btn btn-sm bg-white hover:bg-[#F1FAF3] border border-[#CDEBD6]"
                 onClick={() => setShowProfile((v) => !v)}
                 title="Ver perfil del cliente"
               >
@@ -284,73 +293,127 @@ export default function ChatWindow({ conversationId }) {
         </div>
       </header>
 
-      {/* Mensajes */}
-      <main ref={viewportRef} className="flex-1 px-4 py-4 overflow-y-auto">
-        {msgs.length === 0 && (
-          <div className="p-4 mx-auto text-sm text-center border rounded-xl bg-base-200">
-            Sin mensajes todavía.
-          </div>
-        )}
-
-        <div className="flex flex-col w-full gap-3 mx-auto max-w-none">
-          {msgs.map((m) => {
-            const isOut = m?.direction === "out";
-            const status = m?.status || "";
-            const toRawSent = m?.toRawSent || "";
-            const variant = m?.sendVariant || "";
-            const errCode =
-              m?.error?.error?.code ??
-              m?.error?.code ??
-              (status === "error" ? "?" : "");
-
-            return (
-              <div
-                key={m.id}
-                className={`chat ${isOut ? "chat-end" : "chat-start"}`}
-              >
-                <div
-                  className={
-                    "chat-bubble whitespace-pre-wrap shadow " +
-                    (isOut
-                      ? "chat-bubble-primary text-white"
-                      : "bg-base-200 text-black")
-                  }
-                >
-                  {typeof m?.text === "string"
-                    ? m.text
-                    : m?.template
-                    ? `[template] ${m.template}`
-                    : JSON.stringify(m?.text || "")}
-                </div>
-
-                <div className="chat-footer mt-1 text-[10px]">
-                  {formatTs(m?.timestamp)}
-                  {isOut && (
-                    <>
-                      {" • "}
-                      {status === "error" ? "❌ no enviado" : "✅ enviado"}
-                      {toRawSent ? ` • a ${toRawSent}` : ""}
-                      {variant ? ` (${variant})` : ""}
-                      {status === "error" && errCode ? ` • code ${errCode}` : ""}
-                    </>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+      {/* ⭐ pestañas */}
+      <div className="px-4 pt-2">
+        <div className="flex overflow-hidden border rounded bg-white/70 border-[#CDEBD6]">
+          <button
+            className={
+              "px-3 py-1 text-sm transition-colors " +
+              (tab === "chat"
+                ? "bg-[#2E7D32] text-white"
+                : "bg-transparent hover:bg-[#E8F5E9]")
+            }
+            onClick={() => setTab("chat")}
+          >
+            Chat
+          </button>
+          <button
+            className={
+              "px-3 py-1 text-sm transition-colors " +
+              (tab === "destacados"
+                ? "bg-[#2E7D32] text-white"
+                : "bg-transparent hover:bg-[#E8F5E9]")
+            }
+            onClick={() => setTab("destacados")}
+          >
+            Destacados
+          </button>
         </div>
-      </main>
+      </div>
+
+      {/* Contenido principal */}
+      {tab === "chat" ? (
+        // ====== Vista chat ======
+        <main ref={viewportRef} className="flex-1 px-4 py-4 overflow-y-auto">
+          {msgs.length === 0 && (
+            <div className="p-4 mx-auto text-sm text-center border rounded-xl bg-[#EAF7EE] border-[#CDEBD6]">
+              Sin mensajes todavía.
+            </div>
+          )}
+
+          <div className="flex flex-col w-full gap-3 mx-auto max-w-none">
+            {msgs.map((m) => {
+              const isOut = m?.direction === "out";
+              const status = m?.status || "";
+              const toRawSent = m?.toRawSent || "";
+              const variant = m?.sendVariant || "";
+              const errCode =
+                m?.error?.error?.code ??
+                m?.error?.code ??
+                (status === "error" ? "?" : "");
+
+              // texto visible (con fallback)
+              const visibleText =
+                typeof m?.text === "string"
+                  ? m.text
+                  : m?.template
+                  ? `[template] ${m.template}`
+                  : JSON.stringify(m?.text || "");
+
+              // ⭐ Opción 2 (UI): sólo mostrar la estrella para estados permitidos
+              const allowStar = ["sent", "delivered", "read"].includes(status);
+
+              return (
+                <div
+                  key={m.id}
+                  className={`chat ${isOut ? "chat-end" : "chat-start"}`}
+                >
+                  {/* Burbuja + ⭐ (condicional) */}
+                  <div className="flex items-center gap-2">
+                    <div
+                      className={
+                        "chat-bubble whitespace-pre-wrap shadow " +
+                        (isOut
+                          ? "chat-bubble-primary text-white"
+                          : "bg-[#EAF7EE] text-black border border-[#CDEBD6]")
+                      }
+                    >
+                      {visibleText}
+                    </div>
+
+                    {allowStar && (
+                      <StarButton
+                        chatId={conversationId}
+                        messageId={m.id}
+                        texto={visibleText}
+                      />
+                    )}
+                  </div>
+
+                  <div className="chat-footer mt-1 text-[10px]">
+                    {formatTs(m?.timestamp)}
+                    {isOut && (
+                      <>
+                        {" • "}
+                        {status === "error" ? "❌ no enviado" : "✅ enviado"}
+                        {toRawSent ? ` • a ${toRawSent}` : ""}
+                        {variant ? ` (${variant})` : ""}
+                        {status === "error" && errCode ? ` • code ${errCode}` : ""}
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </main>
+      ) : (
+        // ====== Vista destacados ======
+        <main className="flex-1 px-4 py-4 overflow-y-auto">
+          <ChatDestacadosPanel chatId={conversationId} />
+        </main>
+      )}
 
       {/* Input */}
-      <div className="border-t bg-base-100">
+      <div className="border-t bg-[#F6FBF7] border-[#CDEBD6]">
         <div className="px-4 py-3">
           <div className="flex flex-col w-full gap-2 mx-auto max-w-none">
             <QuickRepliesBar onPick={onPickQuick} />
 
-            <div className="flex items-end gap-2 p-2 border shadow-sm rounded-xl bg-base-100">
+            <div className="flex items-end gap-2 p-2 border shadow-sm rounded-xl bg-white border-[#CDEBD6]">
               <textarea
                 ref={textareaRef}
-                className="textarea textarea-bordered w-full min-h-[48px] max-h-40 resize-y text-black placeholder:text-black/60"
+                className="textarea textarea-bordered w-full min-h-[48px] max-h-40 resize-y text-black placeholder:text-black/60 border-[#CDEBD6] focus:border-[#2E7D32]"
                 placeholder={
                   canWrite
                     ? "Escribí un mensaje… (Enter para enviar)"
@@ -365,7 +428,8 @@ export default function ChatWindow({ conversationId }) {
               <button
                 onClick={doSend}
                 disabled={!text.trim() || sending || !canWrite}
-                className="btn btn-primary"
+                className="btn"
+                style={{ backgroundColor: "#2E7D32", borderColor: "#2E7D32", color: "#fff" }}
                 title="Enviar (Enter)"
               >
                 {sending ? "Enviando…" : "Enviar"}
@@ -377,8 +441,8 @@ export default function ChatWindow({ conversationId }) {
 
       {/* Drawer de perfil */}
       {showProfile && (
-        <div className="fixed inset-y-0 right-0 w-full max-w-md bg-base-100 shadow-xl border-l z-[80]">
-          <div className="flex items-center justify-between p-3 border-b">
+        <div className="fixed inset-y-0 right-0 w-full max-w-md bg-base-100 shadow-xl border-l z-[80] border-[#CDEBD6]">
+          <div className="flex items-center justify-between p-3 border-b border-[#CDEBD6]">
             <h3 className="font-semibold">Perfil de cliente</h3>
             <button
               className="btn btn-ghost btn-sm"

@@ -200,10 +200,10 @@ export default function ConversationsList({ activeId, onSelect }) {
   };
 
   return (
-    <div className="flex flex-col min-h-0 border-r bg-base-100">
+    <div className="flex flex-col min-h-0 border-r bg-[#F6FBF7] border-[#CDEBD6]">
       {/* Header: tabs + búsqueda */}
-      <div className="flex items-center gap-2 p-2">
-        <div className="flex overflow-hidden border rounded">
+      <div className="flex items-center gap-2 p-2 border-b bg-[#E8F5E9] border-[#CDEBD6]">
+        <div className="flex overflow-hidden border rounded bg-white/70 border-[#CDEBD6]">
           {[
             ["todos", "Todos"],
             ["mios", "Mis chats"],
@@ -213,10 +213,10 @@ export default function ConversationsList({ activeId, onSelect }) {
             <button
               key={key}
               className={
-                "px-3 py-1 text-sm " +
+                "px-3 py-1 text-sm transition-colors " +
                 (tab === key
-                  ? "bg-primary text-white"
-                  : "bg-base-100 hover:bg-base-200")
+                  ? "bg-[#2E7D32] text-white"
+                  : "bg-transparent hover:bg-[#E8F5E9]")
               }
               onClick={() => setTab(key)}
               title={label}
@@ -227,7 +227,7 @@ export default function ConversationsList({ activeId, onSelect }) {
         </div>
 
         <input
-          className="flex-1 input input-sm input-bordered"
+          className="flex-1 input input-sm bg-white input-bordered border-[#CDEBD6] focus:border-[#2E7D32] focus:outline-none"
           placeholder="Buscar nombre o número…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -251,8 +251,8 @@ export default function ConversationsList({ activeId, onSelect }) {
                 <div
                   key={c.id}
                   className={
-                    "border-t bg-base-100 px-3 py-2 " +
-                    (isActive ? "bg-base-200 " : "hover:bg-base-200/60 ") +
+                    "border-t px-3 py-2 transition-colors border-[#E3EFE7] " +
+                    (isActive ? "bg-[#E8F5E9] " : "bg-white hover:bg-[#F1FAF3] ") +
                     (lockedByOther ? "opacity-60 cursor-not-allowed " : "")
                   }
                   role="button"
@@ -293,47 +293,52 @@ export default function ConversationsList({ activeId, onSelect }) {
                         </button>
                       ) : c.assignedToUid ? (
                         <button
-  className="cursor-not-allowed btn btn-xs"
-  style={{
-    backgroundColor: "var(--color-error, #ef4444)",
-    borderColor: "var(--color-error, #ef4444)",
-    color: "#fff",
-  }}
-  disabled
-  onClick={(e) => e.stopPropagation()}
-  title={`Asignada a ${c.assignedToName || "otro agente"}`}
->
-  Ocupada
-</button>
-
+                          className="cursor-not-allowed btn btn-xs"
+                          style={{
+                            backgroundColor: "var(--color-error, #ef4444)",
+                            borderColor: "var(--color-error, #ef4444)",
+                            color: "#fff",
+                          }}
+                          disabled
+                          onClick={(e) => e.stopPropagation()}
+                          title={`Asignada a ${c.assignedToName || "otro agente"}`}
+                        >
+                          Ocupada
+                        </button>
                       ) : (
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
                             assignToMe(c);
                           }}
-                          className="btn btn-xs btn-primary"
+                          className="btn btn-xs"
+                          style={{ backgroundColor: "#2E7D32", borderColor: "#2E7D32", color: "#fff" }}
                           title="Asignarme esta conversación"
                         >
                           Asignarme
                         </button>
                       )}
 
+                      {/* ☆/★: deshabilitado si lockedByOther */}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
+                          if (lockedByOther) return;
                           toggleStar(c);
                         }}
+                        disabled={lockedByOther}
                         className={
                           "text-xl leading-none " +
-                          (isStarred(c)
-                            ? "text-yellow-500"
-                            : "text-gray-400 hover:text-gray-600")
+                          (lockedByOther
+                            ? "opacity-30 cursor-not-allowed"
+                            : (isStarred(c)
+                                ? "text-yellow-500"
+                                : "text-gray-400 hover:text-gray-600"))
                         }
                         title={
-                          isStarred(c)
-                            ? "Quitar de favoritos"
-                            : "Agregar a favoritos"
+                          lockedByOther
+                            ? `No podés marcar favoritos: asignada a ${c.assignedToName || "otro agente"}`
+                            : (isStarred(c) ? "Quitar de favoritos" : "Agregar a favoritos")
                         }
                       >
                         {isStarred(c) ? "★" : "☆"}
@@ -363,15 +368,15 @@ export default function ConversationsList({ activeId, onSelect }) {
           // ===== Vista por etiqueta (solo MIS etiquetas) =====
           <div className="flex min-h-0">
             {/* Sidebar */}
-            <aside className="w-56 overflow-y-auto border-r shrink-0">
-              <div className="p-2 border-b">
+            <aside className="w-56 overflow-y-auto border-r shrink-0 border-[#CDEBD6]">
+              <div className="p-2 border-b border-[#CDEBD6] bg-[#EAF7EE]">
                 <button
                   onClick={() => setSelectedLabel("__all__")}
                   className={
-                    "w-full rounded px-2 py-1 text-left " +
+                    "w-full rounded px-2 py-1 text-left transition-colors " +
                     (selectedLabel === "__all__"
-                      ? "bg-primary text-white"
-                      : "hover:bg-base-200")
+                      ? "bg-[#2E7D32] text-white"
+                      : "hover:bg-[#E8F5E9]")
                   }
                   title="Ver todas (mis etiquetas agrupadas)"
                 >
@@ -387,10 +392,10 @@ export default function ConversationsList({ activeId, onSelect }) {
                       <button
                         onClick={() => setSelectedLabel(slug)}
                         className={
-                          "flex w-full items-center justify-between gap-2 rounded px-2 py-1 " +
+                          "flex w-full items-center justify-between gap-2 rounded px-2 py-1 transition-colors " +
                           (selectedLabel === slug
-                            ? "bg-primary text-white"
-                            : "hover:bg-base-200")
+                            ? "bg-[#2E7D32] text-white"
+                            : "hover:bg-[#E8F5E9]")
                         }
                         title={isNone ? "Sin etiqueta" : slug}
                       >
@@ -426,7 +431,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                     const isNone = slug === "__none__";
                     return (
                       <details key={slug} className="group">
-                        <summary className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-base-200">
+                        <summary className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-[#EAF7EE]">
                           <div className="flex items-center gap-2">
                             {isNone ? (
                               <span className="text-xs badge badge-neutral">
@@ -458,8 +463,8 @@ export default function ConversationsList({ activeId, onSelect }) {
                               <div
                                 key={c.id}
                                 className={
-                                  "rounded border bg-base-100 px-3 py-2 " +
-                                  (isActive ? "bg-base-200 " : "hover:bg-base-200/60 ") +
+                                  "rounded border bg-white px-3 py-2 transition-colors border-[#E3EFE7] " +
+                                  (isActive ? "bg-[#E8F5E9] " : "hover:bg-[#F1FAF3] ") +
                                   (lockedByOther
                                     ? "opacity-60 cursor-not-allowed "
                                     : "")
@@ -521,27 +526,33 @@ export default function ConversationsList({ activeId, onSelect }) {
                                           e.stopPropagation();
                                           assignToMe(c);
                                         }}
-                                        className="btn btn-xs btn-primary"
+                                        className="btn btn-xs"
+                                        style={{ backgroundColor: "#2E7D32", borderColor: "#2E7D32", color: "#fff" }}
                                         title="Asignarme esta conversación"
                                       >
                                         Asignarme
                                       </button>
                                     )}
+                                    {/* ☆/★: deshabilitado si lockedByOther */}
                                     <button
                                       onClick={(e) => {
                                         e.stopPropagation();
+                                        if (lockedByOther) return;
                                         toggleStar(c);
                                       }}
+                                      disabled={lockedByOther}
                                       className={
                                         "text-xl leading-none " +
-                                        (isStarred(c)
-                                          ? "text-yellow-500"
-                                          : "text-gray-400 hover:text-gray-600")
+                                        (lockedByOther
+                                          ? "opacity-30 cursor-not-allowed"
+                                          : (isStarred(c)
+                                              ? "text-yellow-500"
+                                              : "text-gray-400 hover:text-gray-600"))
                                       }
                                       title={
-                                        isStarred(c)
-                                          ? "Quitar de favoritos"
-                                          : "Agregar a favoritos"
+                                        lockedByOther
+                                          ? `No podés marcar favoritos: asignada a ${c.assignedToName || "otro agente"}`
+                                          : (isStarred(c) ? "Quitar de favoritos" : "Agregar a favoritos")
                                       }
                                     >
                                       {isStarred(c) ? "★" : "☆"}
@@ -589,8 +600,8 @@ export default function ConversationsList({ activeId, onSelect }) {
                       <div
                         key={c.id}
                         className={
-                          "rounded border bg-base-100 px-3 py-2 " +
-                          (isActive ? "bg-base-200 " : "hover:bg-base-200/60 ") +
+                          "rounded border bg-white px-3 py-2 transition-colors border-[#E3EFE7] " +
+                          (isActive ? "bg-[#E8F5E9] " : "hover:bg-[#F1FAF3] ") +
                           (lockedByOther ? "opacity-60 cursor-not-allowed " : "")
                         }
                         role="button"
@@ -645,27 +656,33 @@ export default function ConversationsList({ activeId, onSelect }) {
                                   e.stopPropagation();
                                   assignToMe(c);
                                 }}
-                                className="btn btn-xs btn-primary"
+                                className="btn btn-xs"
+                                style={{ backgroundColor: "#2E7D32", borderColor: "#2E7D32", color: "#fff" }}
                                 title="Asignarme esta conversación"
                               >
                                 Asignarme
                               </button>
                             )}
+                            {/* ☆/★: deshabilitado si lockedByOther */}
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
+                                if (lockedByOther) return;
                                 toggleStar(c);
                               }}
+                              disabled={lockedByOther}
                               className={
                                 "text-xl leading-none " +
-                                (isStarred(c)
-                                  ? "text-yellow-500"
-                                  : "text-gray-400 hover:text-gray-600")
+                                (lockedByOther
+                                  ? "opacity-30 cursor-not-allowed"
+                                  : (isStarred(c)
+                                      ? "text-yellow-500"
+                                      : "text-gray-400 hover:text-gray-600"))
                               }
                               title={
-                                isStarred(c)
-                                  ? "Quitar de favoritos"
-                                  : "Agregar a favoritos"
+                                lockedByOther
+                                  ? `No podés marcar favoritos: asignada a ${c.assignedToName || "otro agente"}`
+                                  : (isStarred(c) ? "Quitar de favoritos" : "Agregar a favoritos")
                               }
                             >
                               {isStarred(c) ? "★" : "☆"}
