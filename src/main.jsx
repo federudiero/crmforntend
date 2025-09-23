@@ -6,7 +6,7 @@ import "./index.css";
 
 import LoginPage from "./pages/LoginPage.jsx";
 import RequireAuth from "./components/RequireAuth.jsx";
-import Home from "./pages/Home.jsx"; // usa misma mayúscula que App.jsx
+import Home from "./pages/home.jsx"; 
 
 // Asegura el tema DaisyUI (ya tienes los colores en index.css)
 document.documentElement.setAttribute("data-theme", "crm");
