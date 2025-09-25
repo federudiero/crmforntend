@@ -69,3 +69,7 @@
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
 body { font-family: ui-sans-serif, system-ui, -apple-system, "Inter", "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif; }
+/* Utilidad: contenedor que permite que hijos con overflow tengan scroll */
+.min-h-0 {
+  min-height: 0; /* útil con flex/grid parents */
+}

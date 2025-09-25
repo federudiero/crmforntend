@@ -1,4 +1,3 @@
-// src/pages/Home.jsx
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { signOut } from "firebase/auth";
@@ -19,10 +18,19 @@ export default function Home() {
   // UI local
   const [showRemarketing, setShowRemarketing] = useState(false);
 
+  // Vista móvil: "list" | "chat"
+  const decoded = convId ? decodeURIComponent(convId) : null;
+  const [mobileView, setMobileView] = useState(decoded ? "chat" : "list");
+
   useEffect(() => {
     // si usás daisyUI theme
     document.documentElement.setAttribute("data-theme", "crm");
   }, []);
+
+  // Si cambia la URL (abrís una conversación), en mobile pasamos a "chat"
+  useEffect(() => {
+    if (decoded) setMobileView("chat");
+  }, [decoded]);
 
   // ESC para cerrar remarketing
   useEffect(() => {
@@ -36,24 +44,59 @@ export default function Home() {
   const adminEmails = useMemo(() => ["fede_rudiero@gmail.com"], []);
   const isAdmin = !!user?.email && adminEmails.includes(user.email);
 
-  const openConv = (id) => navigate(`/home/${encodeURIComponent(id)}`);
-  const currentConvId = convId ? decodeURIComponent(convId) : null;
+  const openConv = (id) => {
+    navigate(`/home/${encodeURIComponent(id)}`);
+    // En móviles, al abrir una conv saltamos al chat
+    setMobileView("chat");
+  };
+
+  const currentConvId = decoded;
 
   return (
     <div className="flex flex-col h-full">
-    <header className="flex items-center justify-between p-4 border-b bg-[#E8F5E9] border-[#CDEBD6]">
-
+      {/* Header */}
+      <header className="flex items-center justify-between border-b bg-[#E8F5E9] border-[#CDEBD6] p-3 md:p-4">
         <div className="min-w-0">
-          <h1 className="text-xl font-semibold truncate">CRM WhatsApp</h1>
+          <h1 className="text-lg font-semibold truncate md:text-xl">CRM WhatsApp</h1>
           <p className="text-xs text-gray-500 truncate">
             {user?.email} {isAdmin ? "(admin)" : ""}
           </p>
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Mobile: switch Lista/Chat */}
+          {!isAdmin && (
+            <div className="join md:hidden">
+              <button
+                className={
+                  "join-item btn btn-xs " +
+                  (mobileView === "list"
+                    ? "btn-success text-white"
+                    : "bg-white text-black border-[#CDEBD6]")
+                }
+                onClick={() => setMobileView("list")}
+                title="Ver lista"
+              >
+                Lista
+              </button>
+              <button
+                className={
+                  "join-item btn btn-xs " +
+                  (mobileView === "chat"
+                    ? "btn-success text-white"
+                    : "bg-white text-black border-[#CDEBD6]")
+                }
+                onClick={() => setMobileView("chat")}
+                title="Ver chat"
+              >
+                Chat
+              </button>
+            </div>
+          )}
+
           {/* Botón Remarketing disponible para todos */}
           <button
-            className="px-3 py-1 text-sm border rounded"
+            className="hidden px-3 py-1 text-sm border rounded md:inline-flex"
             onClick={() => setShowRemarketing(true)}
             title="Abrir Remarketing por plantillas"
           >
@@ -61,11 +104,7 @@ export default function Home() {
           </button>
 
           {/* Botones para vendedores (usuarios no-admin) */}
-          {!isAdmin && (
-            <>
-              <NewConversation onOpen={openConv} />
-            </>
-          )}
+          {!isAdmin && <NewConversation onOpen={openConv} />}
 
           <button
             className="px-2 py-1 text-sm border rounded"
@@ -85,46 +124,72 @@ export default function Home() {
         {isAdmin ? (
           <AdminPanel />
         ) : (
-          <div className="grid h-full grid-cols-12">
-            {/* Lista izquierda con su propio scroll */}
-            <aside className="h-full min-h-0 col-span-4 overflow-y-auto border-r">
-              <ConversationsList
-                activeId={currentConvId || ""}
-                onSelect={openConv}
-                restrictOthers // 👈 oculta conversaciones asignadas a otros
-              />
-            </aside>
+          <>
+            {/* Desktop ≥ md: layout 4/8 clásico */}
+            <div className="hidden h-full grid-cols-12 md:grid">
+              <aside className="h-full min-h-0 col-span-4 overflow-y-auto border-r">
+                <ConversationsList
+                  activeId={currentConvId || ""}
+                  onSelect={openConv}
+                  restrictOthers
+                />
+              </aside>
 
-            {/* Columna del chat: dejamos que el ChatWindow maneje su scroll interno */}
-            <main className="flex min-h-0 col-span-8">
-              {currentConvId ? (
-                <ChatWindow conversationId={currentConvId} />
-              ) : (
-                <div className="flex items-center justify-center flex-1 h-full text-gray-500">
-                  Elegí una conversación o creá una nueva.
+              <main className="flex min-h-0 col-span-8">
+                {currentConvId ? (
+                  <ChatWindow
+                    conversationId={currentConvId}
+                  />
+                ) : (
+                  <div className="flex items-center justify-center flex-1 text-gray-500">
+                    Elegí una conversación o creá una nueva.
+                  </div>
+                )}
+              </main>
+            </div>
+
+            {/* Mobile ≤ md: panel único conmutado */}
+            <div className="h-full md:hidden">
+              {mobileView === "list" && (
+                <div className="h-full min-h-0 overflow-hidden">
+                  <ConversationsList
+                    activeId={currentConvId || ""}
+                    onSelect={openConv}
+                    restrictOthers
+                  />
                 </div>
               )}
-            </main>
-          </div>
+              {mobileView === "chat" && (
+                <div className="h-full min-h-0">
+                  {currentConvId ? (
+                    <ChatWindow
+                      conversationId={currentConvId}
+                      onBack={() => setMobileView("list")}
+                      mobile
+                    />
+                  ) : (
+                    <div className="flex items-center justify-center h-full p-4 text-center text-gray-500">
+                      Abrí una conversación desde <b className="mx-1">Lista</b>.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </>
         )}
       </div>
 
-      {/* ——————————————————————————————————————————
-          MODAL / OVERLAY Remarketing (z-index alto)
-          Cubre toda la pantalla y evita mezclarse con el chat
-          —————————————————————————————————————————— */}
+      {/* Overlay Remarketing */}
       {showRemarketing && (
         <div
           className="fixed inset-0 z-[9999] flex items-center justify-center"
           aria-modal="true"
           role="dialog"
         >
-          {/* Backdrop */}
           <div
             className="absolute inset-0 bg-black/50"
             onClick={() => setShowRemarketing(false)}
           />
-          {/* Contenedor */}
           <div className="relative z-[10000] w-[95vw] max-w-5xl max-h-[90vh] bg-white rounded-2xl shadow-xl border overflow-hidden">
             <div className="flex items-center justify-between p-3 border-b">
               <h2 className="text-lg font-semibold">Remarketing por plantillas</h2>

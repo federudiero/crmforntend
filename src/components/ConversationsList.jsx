@@ -24,6 +24,9 @@ function formatShort(ts) {
   return d ? d.toLocaleString() : "";
 }
 
+/** Normaliza slugs para usar como clave del índice */
+const normSlug = (s) => String(s ?? "").trim().toLowerCase();
+
 export default function ConversationsList({ activeId, onSelect }) {
   const { user } = useAuthState();
   const [items, setItems] = useState([]);
@@ -64,6 +67,16 @@ export default function ConversationsList({ activeId, onSelect }) {
   // Helpers
   const isStarred = (c) =>
     Array.isArray(c.stars) && user?.uid ? c.stars.includes(user.uid) : false;
+
+  const isAdmin =
+    !!user?.email &&
+    ["federudiero@gmail.com", "fede_rudiero@gmail.com"].includes(user.email);
+
+  const canDelete = (c) => {
+    if (!user?.uid) return false;
+    if (isAdmin) return true;
+    return c.assignedToUid === user.uid; // solo el dueño asignado
+  };
 
   // Acciones rápidas
   const toggleStar = async (c) => {
@@ -117,18 +130,44 @@ export default function ConversationsList({ activeId, onSelect }) {
     }
   };
 
-  // Buscar por texto (nombre o número)
+  const softDelete = async (c) => {
+    if (!canDelete(c)) return;
+    const ref = doc(db, "conversations", c.id);
+    const who = user?.displayName || user?.email || "Agente";
+    if (
+      !window.confirm(
+        `¿Eliminar esta conversación?\n\nCliente: ${
+          c.contact?.name || c.id
+        }\n\nNo se borran los mensajes del servidor, solo se ocultará de tu lista.`
+      )
+    ) {
+      return;
+    }
+    try {
+      await updateDoc(ref, {
+        deletedAt: new Date().toISOString(),
+        deletedByUid: user?.uid || "",
+        deletedByName: who,
+      });
+    } catch (e) {
+      console.error("softDelete error", e);
+      alert("No se pudo eliminar.");
+    }
+  };
+
+  // Buscar por texto (nombre o número) + excluir eliminados
   const filteredByText = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter((c) => {
+    const base = items.filter((c) => !c.deletedAt); // ocultar eliminados
+    if (!q) return base;
+    return base.filter((c) => {
       const name = String(c.contact?.name || "").toLowerCase();
       const id = String(c.id || "").toLowerCase();
       return name.includes(q) || id.includes(q);
     });
   }, [items, search]);
 
-  // Filtros por pestaña (para lista normal)
+  // Filtros por pestaña (lista normal)
   const filtered = useMemo(() => {
     const base = filteredByText;
     if (tab === "mios" && user?.uid) {
@@ -143,30 +182,29 @@ export default function ConversationsList({ activeId, onSelect }) {
   }, [filteredByText, tab, user?.uid]);
 
   // =========================
-  //   ETIQUETAS POR VENDEDOR
+  //   ETIQUETAS (MIS CHATS)
   // =========================
-  // En la vista "Por etiqueta", construimos el índice SOLO
-  // con conversaciones asignadas al usuario actual.
   const myForLabels = useMemo(() => {
     if (!user?.uid) return [];
     return filteredByText.filter((c) => c.assignedToUid === user.uid);
   }, [filteredByText, user?.uid]);
 
-  // Índice por etiqueta (solo "mis" conversaciones)
+  /** Índice por etiqueta (clave normalizada), manteniendo nombre original */
   const labelsIndex = useMemo(() => {
-    const map = new Map();
-    const source = myForLabels; // <— clave del cambio
-    for (const c of source) {
+    const map = new Map(); // key: normSlug -> { display, items: [] }
+    for (const c of myForLabels) {
       const slugs =
         Array.isArray(c.labels) && c.labels.length ? c.labels : ["__none__"];
       for (const s of slugs) {
-        if (!map.has(s)) map.set(s, []);
-        map.get(s).push(c);
+        const key = s === "__none__" ? "__none__" : normSlug(s);
+        const display = s === "__none__" ? "__none__" : String(s);
+        if (!map.has(key)) map.set(key, { display, items: [] });
+        map.get(key).items.push(c);
       }
     }
     // ordenar cada grupo por actividad
-    for (const [, arr] of map) {
-      arr.sort((a, b) => {
+    for (const entry of map.values()) {
+      entry.items.sort((a, b) => {
         const ta =
           a.lastMessageAt?.toMillis?.() ??
           (a.lastMessageAt ? +new Date(a.lastMessageAt) : 0);
@@ -180,18 +218,21 @@ export default function ConversationsList({ activeId, onSelect }) {
   }, [myForLabels]);
 
   const sortedGroups = useMemo(() => {
-    const entries = Array.from(labelsIndex.entries());
+    const entries = Array.from(labelsIndex.entries()).map(([key, val]) => ({
+      key,
+      display: val.display,
+      items: val.items,
+    }));
     entries.sort((a, b) => {
-      const diff = b[1].length - a[1].length;
+      const diff = b.items.length - a.items.length;
       if (diff !== 0) return diff;
-      const an = a[0] === "__none__" ? "zzz" : a[0];
-      const bn = b[0] === "__none__" ? "zzz" : b[0];
+      const an = a.display === "__none__" ? "zzz" : a.display;
+      const bn = b.display === "__none__" ? "zzz" : b.display;
       return an.localeCompare(bn);
     });
     return entries;
   }, [labelsIndex]);
 
-  // Abrir sólo si no está tomada por otro
   const canOpen = (c) =>
     !c.assignedToUid || c.assignedToUid === user?.uid;
 
@@ -199,21 +240,27 @@ export default function ConversationsList({ activeId, onSelect }) {
     if (canOpen(c)) onSelect?.(c.id);
   };
 
+  // clave seleccionada normalizada
+  const selectedKey =
+    selectedLabel === "__all__" ? "__all__" : normSlug(selectedLabel);
+  const selectedGroup =
+    selectedKey === "__all__" ? null : labelsIndex.get(selectedKey);
+
   return (
-    <div className="flex flex-col min-h-0 border-r bg-[#F6FBF7] border-[#CDEBD6]">
-      {/* Header: tabs + búsqueda */}
-      <div className="flex items-center gap-2 p-2 border-b bg-[#E8F5E9] border-[#CDEBD6]">
-        <div className="flex overflow-hidden border rounded bg-white/70 border-[#CDEBD6]">
+    <div className="flex flex-col min-h-0 h-full border-r bg-[#F6FBF7] border-[#CDEBD6]">
+      {/* Header: tabs + búsqueda (sticky en mobile) */}
+      <div className="sticky top-0 z-10 flex items-center gap-2 p-2 border-b bg-[#E8F5E9] border-[#CDEBD6]">
+        <div className="flex overflow-x-auto max-w-full border rounded bg-white/70 border-[#CDEBD6]">
           {[
             ["todos", "Todos"],
             ["mios", "Mis chats"],
             ["fav", "Favoritos"],
-            ["etiquetas", "Por etiqueta"], // ← esta ahora es "mis etiquetas"
+            ["etiquetas", "Por etiqueta"],
           ].map(([key, label]) => (
             <button
               key={key}
               className={
-                "px-3 py-1 text-sm transition-colors " +
+                "px-3 py-2 text-sm whitespace-nowrap transition-colors " +
                 (tab === key
                   ? "bg-[#2E7D32] text-white"
                   : "bg-transparent hover:bg-[#E8F5E9]")
@@ -234,7 +281,7 @@ export default function ConversationsList({ activeId, onSelect }) {
         />
       </div>
 
-      {/* Contenido */}
+      {/* Contenido scrollable */}
       <div className="flex-1 overflow-y-auto">
         {tab !== "etiquetas" ? (
           <>
@@ -251,7 +298,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                 <div
                   key={c.id}
                   className={
-                    "border-t px-3 py-2 transition-colors border-[#E3EFE7] " +
+                    "border-t px-3 py-3 transition-colors border-[#E3EFE7] " +
                     (isActive ? "bg-[#E8F5E9] " : "bg-white hover:bg-[#F1FAF3] ") +
                     (lockedByOther ? "opacity-60 cursor-not-allowed " : "")
                   }
@@ -268,7 +315,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                       : c.id
                   }
                 >
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <div className="font-mono text-sm truncate">
                         {c.contact?.name || c.id}
@@ -284,16 +331,22 @@ export default function ConversationsList({ activeId, onSelect }) {
                     <div className="flex items-center gap-2 shrink-0">
                       {assignedToMe ? (
                         <button
-                          onClick={(e) => { e.stopPropagation(); unassign(c); }}
-                          className="border-0 btn btn-xs"
-                          style={{ backgroundColor: "var(--color-error, #ef4444)", color: "#fff" }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            unassign(c);
+                          }}
+                          className="border-0 btn btn-xs md:btn-sm"
+                          style={{
+                            backgroundColor: "var(--color-error, #ef4444)",
+                            color: "#fff",
+                          }}
                           title="Desasignarme"
                         >
                           Yo ✓
                         </button>
                       ) : c.assignedToUid ? (
                         <button
-                          className="cursor-not-allowed btn btn-xs"
+                          className="cursor-not-allowed btn btn-xs md:btn-sm"
                           style={{
                             backgroundColor: "var(--color-error, #ef4444)",
                             borderColor: "var(--color-error, #ef4444)",
@@ -311,8 +364,12 @@ export default function ConversationsList({ activeId, onSelect }) {
                             e.stopPropagation();
                             assignToMe(c);
                           }}
-                          className="btn btn-xs"
-                          style={{ backgroundColor: "#2E7D32", borderColor: "#2E7D32", color: "#fff" }}
+                          className="btn btn-xs md:btn-sm"
+                          style={{
+                            backgroundColor: "#2E7D32",
+                            borderColor: "#2E7D32",
+                            color: "#fff",
+                          }}
                           title="Asignarme esta conversación"
                         >
                           Asignarme
@@ -331,17 +388,41 @@ export default function ConversationsList({ activeId, onSelect }) {
                           "text-xl leading-none " +
                           (lockedByOther
                             ? "opacity-30 cursor-not-allowed"
-                            : (isStarred(c)
-                                ? "text-yellow-500"
-                                : "text-gray-400 hover:text-gray-600"))
+                            : isStarred(c)
+                            ? "text-yellow-500"
+                            : "text-gray-400 hover:text-gray-600")
                         }
                         title={
                           lockedByOther
                             ? `No podés marcar favoritos: asignada a ${c.assignedToName || "otro agente"}`
-                            : (isStarred(c) ? "Quitar de favoritos" : "Agregar a favoritos")
+                            : isStarred(c)
+                            ? "Quitar de favoritos"
+                            : "Agregar a favoritos"
                         }
                       >
                         {isStarred(c) ? "★" : "☆"}
+                      </button>
+
+                      {/* 🗑️ Eliminar (soft delete) */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          softDelete(c);
+                        }}
+                        disabled={!canDelete(c)}
+                        className={
+                          "btn btn-xs md:btn-sm " +
+                          (!canDelete(c)
+                            ? "btn-disabled"
+                            : "border border-red-500 text-red-600 hover:bg-red-50")
+                        }
+                        title={
+                          canDelete(c)
+                            ? "Eliminar conversación (soft delete)"
+                            : "Solo puede eliminarla el agente asignado"
+                        }
+                      >
+                        🗑️
                       </button>
                     </div>
                   </div>
@@ -365,10 +446,10 @@ export default function ConversationsList({ activeId, onSelect }) {
             })}
           </>
         ) : (
-          // ===== Vista por etiqueta (solo MIS etiquetas) =====
-          <div className="flex min-h-0">
-            {/* Sidebar */}
-            <aside className="w-56 overflow-y-auto border-r shrink-0 border-[#CDEBD6]">
+          // ===== Vista por etiqueta (MIS etiquetas) — responsive fix =====
+          <div className="w-full overflow-x-hidden md:flex md:min-h-0">
+            {/* Sidebar desktop */}
+            <aside className="hidden md:block w-56 overflow-y-auto border-r shrink-0 border-[#CDEBD6]">
               <div className="p-2 border-b border-[#CDEBD6] bg-[#EAF7EE]">
                 <button
                   onClick={() => setSelectedLabel("__all__")}
@@ -378,26 +459,26 @@ export default function ConversationsList({ activeId, onSelect }) {
                       ? "bg-[#2E7D32] text-white"
                       : "hover:bg-[#E8F5E9]")
                   }
-                  title="Ver todas (mis etiquetas agrupadas)"
+                  title="Mis etiquetas (todas agrupadas)"
                 >
                   Mis etiquetas
                 </button>
               </div>
 
               <ul className="p-2 space-y-1">
-                {sortedGroups.map(([slug, arr]) => {
-                  const isNone = slug === "__none__";
+                {sortedGroups.map(({ key, display, items }) => {
+                  const isNone = display === "__none__";
                   return (
-                    <li key={slug}>
+                    <li key={key}>
                       <button
-                        onClick={() => setSelectedLabel(slug)}
+                        onClick={() => setSelectedLabel(display)}
                         className={
                           "flex w-full items-center justify-between gap-2 rounded px-2 py-1 transition-colors " +
-                          (selectedLabel === slug
+                          (normSlug(selectedLabel) === key
                             ? "bg-[#2E7D32] text-white"
                             : "hover:bg-[#E8F5E9]")
                         }
-                        title={isNone ? "Sin etiqueta" : slug}
+                        title={isNone ? "Sin etiqueta" : display}
                       >
                         <span className="flex items-center gap-2 truncate">
                           {isNone ? (
@@ -405,12 +486,10 @@ export default function ConversationsList({ activeId, onSelect }) {
                               Sin etiqueta
                             </span>
                           ) : (
-                            <LabelChips slugs={[slug]} />
+                            <LabelChips slugs={[display]} />
                           )}
                         </span>
-                        <span className="text-xs opacity-70">
-                          {arr.length}
-                        </span>
+                        <span className="text-xs opacity-70">{items.length}</span>
                       </button>
                     </li>
                   );
@@ -423,14 +502,31 @@ export default function ConversationsList({ activeId, onSelect }) {
               </ul>
             </aside>
 
+            {/* Selector mobile (arriba y sticky) */}
+            <div className="w-full md:hidden sticky top-0 z-10 border-b border-[#CDEBD6] bg-[#EAF7EE] p-2">
+              <label className="block mb-1 text-xs text-gray-600">Etiqueta</label>
+              <select
+                className="select select-sm w-full bg-white border-[#CDEBD6] focus:border-[#2E7D32] focus:outline-none"
+                value={selectedLabel}
+                onChange={(e) => setSelectedLabel(e.target.value)}
+              >
+                <option value="__all__">Mis etiquetas (agrupadas)</option>
+                {sortedGroups.map(({ key, display, items }) => (
+                  <option key={key} value={display}>
+                    {display === "__none__" ? "Sin etiqueta" : display} ({items.length})
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {/* Contenido derecha */}
-            <section className="flex-1 overflow-y-auto">
-              {selectedLabel === "__all__" ? (
+            <section className="w-full min-w-0 overflow-y-auto md:flex-1">
+              {selectedKey === "__all__" ? (
                 <div className="divide-y">
-                  {sortedGroups.map(([slug, arr]) => {
-                    const isNone = slug === "__none__";
+                  {sortedGroups.map(({ key, display, items }) => {
+                    const isNone = display === "__none__";
                     return (
-                      <details key={slug} className="group">
+                      <details key={key} className="group">
                         <summary className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-[#EAF7EE]">
                           <div className="flex items-center gap-2">
                             {isNone ? (
@@ -438,15 +534,15 @@ export default function ConversationsList({ activeId, onSelect }) {
                                 Sin etiqueta
                               </span>
                             ) : (
-                              <LabelChips slugs={[slug]} />
+                              <LabelChips slugs={[display]} />
                             )}
                           </div>
                           <span className="text-xs text-gray-500">
-                            {arr.length}
+                            {items.length}
                           </span>
                         </summary>
                         <div className="p-2 space-y-1">
-                          {arr.map((c) => {
+                          {items.map((c) => {
                             const isActive =
                               String(c.id) === String(activeId || "");
                             const slugs = Array.isArray(c.labels)
@@ -502,16 +598,22 @@ export default function ConversationsList({ activeId, onSelect }) {
                                   <div className="flex items-center gap-2 shrink-0">
                                     {assignedToMe ? (
                                       <button
-                                        onClick={(e) => { e.stopPropagation(); unassign(c); }}
-                                        className="border-0 btn btn-xs"
-                                        style={{ backgroundColor: "var(--color-error, #ef4444)", color: "#fff" }}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          unassign(c);
+                                        }}
+                                        className="border-0 btn btn-xs md:btn-sm"
+                                        style={{
+                                          backgroundColor: "var(--color-error, #ef4444)",
+                                          color: "#fff",
+                                        }}
                                         title="Desasignarme"
                                       >
                                         Yo ✓
                                       </button>
                                     ) : c.assignedToUid ? (
                                       <button
-                                        className="btn btn-xs btn-disabled"
+                                        className="btn btn-xs md:btn-sm btn-disabled"
                                         disabled
                                         onClick={(e) => e.stopPropagation()}
                                         title={`Asignada a ${
@@ -526,14 +628,18 @@ export default function ConversationsList({ activeId, onSelect }) {
                                           e.stopPropagation();
                                           assignToMe(c);
                                         }}
-                                        className="btn btn-xs"
-                                        style={{ backgroundColor: "#2E7D32", borderColor: "#2E7D32", color: "#fff" }}
+                                        className="btn btn-xs md:btn-sm"
+                                        style={{
+                                          backgroundColor: "#2E7D32",
+                                          borderColor: "#2E7D32",
+                                          color: "#fff",
+                                        }}
                                         title="Asignarme esta conversación"
                                       >
                                         Asignarme
                                       </button>
                                     )}
-                                    {/* ☆/★: deshabilitado si lockedByOther */}
+                                    {/* ☆/★ */}
                                     <button
                                       onClick={(e) => {
                                         e.stopPropagation();
@@ -545,17 +651,41 @@ export default function ConversationsList({ activeId, onSelect }) {
                                         "text-xl leading-none " +
                                         (lockedByOther
                                           ? "opacity-30 cursor-not-allowed"
-                                          : (isStarred(c)
-                                              ? "text-yellow-500"
-                                              : "text-gray-400 hover:text-gray-600"))
+                                          : isStarred(c)
+                                          ? "text-yellow-500"
+                                          : "text-gray-400 hover:text-gray-600")
                                       }
                                       title={
                                         lockedByOther
                                           ? `No podés marcar favoritos: asignada a ${c.assignedToName || "otro agente"}`
-                                          : (isStarred(c) ? "Quitar de favoritos" : "Agregar a favoritos")
+                                          : isStarred(c)
+                                          ? "Quitar de favoritos"
+                                          : "Agregar a favoritos"
                                       }
                                     >
                                       {isStarred(c) ? "★" : "☆"}
+                                    </button>
+
+                                    {/* 🗑️ Eliminar */}
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        softDelete(c);
+                                      }}
+                                      disabled={!canDelete(c)}
+                                      className={
+                                        "btn btn-xs md:btn-sm " +
+                                        (!canDelete(c)
+                                          ? "btn-disabled"
+                                          : "border border-red-500 text-red-600 hover:bg-red-50")
+                                      }
+                                      title={
+                                        canDelete(c)
+                                          ? "Eliminar conversación (soft delete)"
+                                          : "Solo puede eliminarla el agente asignado"
+                                      }
+                                    >
+                                      🗑️
                                     </button>
                                   </div>
                                 </div>
@@ -586,7 +716,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                 </div>
               ) : (
                 <div className="p-2 space-y-2">
-                  {(labelsIndex.get(selectedLabel) || []).map((c) => {
+                  {(selectedGroup?.items || []).map((c) => {
                     const isActive = String(c.id) === String(activeId || "");
                     const slugs = Array.isArray(c.labels) ? c.labels : [];
                     const assignedToMe =
@@ -632,16 +762,22 @@ export default function ConversationsList({ activeId, onSelect }) {
                           <div className="flex items-center gap-2 shrink-0">
                             {assignedToMe ? (
                               <button
-                                onClick={(e) => { e.stopPropagation(); unassign(c); }}
-                                className="border-0 btn btn-xs"
-                                style={{ backgroundColor: "var(--color-error, #ef4444)", color: "#fff" }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  unassign(c);
+                                }}
+                                className="border-0 btn btn-xs md:btn-sm"
+                                style={{
+                                  backgroundColor: "var(--color-error, #ef4444)",
+                                  color: "#fff",
+                                }}
                                 title="Desasignarme"
                               >
                                 Yo ✓
                               </button>
                             ) : c.assignedToUid ? (
                               <button
-                                className="btn btn-xs btn-disabled"
+                                className="btn btn-xs md:btn-sm btn-disabled"
                                 disabled
                                 onClick={(e) => e.stopPropagation()}
                                 title={`Asignada a ${
@@ -656,14 +792,18 @@ export default function ConversationsList({ activeId, onSelect }) {
                                   e.stopPropagation();
                                   assignToMe(c);
                                 }}
-                                className="btn btn-xs"
-                                style={{ backgroundColor: "#2E7D32", borderColor: "#2E7D32", color: "#fff" }}
+                                className="btn btn-xs md:btn-sm"
+                                style={{
+                                  backgroundColor: "#2E7D32",
+                                  borderColor: "#2E7D32",
+                                  color: "#fff",
+                                }}
                                 title="Asignarme esta conversación"
                               >
                                 Asignarme
                               </button>
                             )}
-                            {/* ☆/★: deshabilitado si lockedByOther */}
+                            {/* ☆/★ */}
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -675,17 +815,41 @@ export default function ConversationsList({ activeId, onSelect }) {
                                 "text-xl leading-none " +
                                 (lockedByOther
                                   ? "opacity-30 cursor-not-allowed"
-                                  : (isStarred(c)
-                                      ? "text-yellow-500"
-                                      : "text-gray-400 hover:text-gray-600"))
+                                  : isStarred(c)
+                                  ? "text-yellow-500"
+                                  : "text-gray-400 hover:text-gray-600")
                               }
                               title={
                                 lockedByOther
                                   ? `No podés marcar favoritos: asignada a ${c.assignedToName || "otro agente"}`
-                                  : (isStarred(c) ? "Quitar de favoritos" : "Agregar a favoritos")
+                                  : isStarred(c)
+                                  ? "Quitar de favoritos"
+                                  : "Agregar a favoritos"
                               }
                             >
                               {isStarred(c) ? "★" : "☆"}
+                            </button>
+
+                            {/* 🗑️ Eliminar */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                softDelete(c);
+                              }}
+                              disabled={!canDelete(c)}
+                              className={
+                                "btn btn-xs md:btn-sm " +
+                                (!canDelete(c)
+                                  ? "btn-disabled"
+                                  : "border border-red-500 text-red-600 hover:bg-red-50")
+                              }
+                              title={
+                                canDelete(c)
+                                  ? "Eliminar conversación (soft delete)"
+                                  : "Solo puede eliminarla el agente asignado"
+                              }
+                            >
+                              🗑️
                             </button>
                           </div>
                         </div>

@@ -13,31 +13,42 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { sendMessage } from "../services/api";
+import { uploadFile } from "../services/storage";
 import { useAuthState } from "../hooks/useAuthState.js";
 import TemplatesPicker from "./TemplatesPicker.jsx";
 import { listLabels } from "../lib/labels";
-
 import StagePicker from "./StagePicker.jsx";
 import QuickRepliesBar from "./QuickRepliesBar.jsx";
 import ClientProfile from "./ClientProfile.jsx";
 import TagsMenu from "./TagsMenu.jsx";
-
-// ⭐ Destacados
+import AudioRecorderButton from "./AudioRecorderButton.jsx";
 import StarButton from "./StarButton.jsx";
 import ChatDestacadosPanel from "./ChatDestacadosPanel.jsx";
+
+// Íconos
+import {
+  Image as ImageIcon,
+  FileAudio2,
+  Send as SendIcon,
+  Tags as TagsIcon,
+  UserRound,
+  FileText,
+  Paperclip,
+} from "lucide-react";
 
 function formatTs(ts) {
   const d = ts?.toDate ? ts.toDate() : (ts ? new Date(ts) : null);
   return d ? d.toLocaleString() : "";
 }
 
-export default function ChatWindow({ conversationId }) {
+/** ChatWindow */
+export default function ChatWindow({ conversationId, onBack }) {
   const navigate = useNavigate();
   const { user } = useAuthState();
 
   // mensajes
   const [msgs, setMsgs] = useState([]);
-  const [sending, setSending] = useState(false);
+  const [sending, setSending] = useState(false); // bloquea sólo adjuntos mientras suben
   const [text, setText] = useState("");
 
   // labels
@@ -51,12 +62,14 @@ export default function ChatWindow({ conversationId }) {
   // UI
   const [showProfile, setShowProfile] = useState(false);
   const [showTags, setShowTags] = useState(false);
-
-  // ⭐ pestañas (chat | destacados)
   const [tab, setTab] = useState("chat");
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
 
   const viewportRef = useRef(null);
   const textareaRef = useRef(null);
+  const imageInputRef = useRef(null);
+  const audioInputRef = useRef(null);
+  const attachBtnRef = useRef(null);
 
   // catálogo de etiquetas
   useEffect(() => {
@@ -160,41 +173,47 @@ export default function ChatWindow({ conversationId }) {
     }
   };
 
-  // enviar
-  const doSend = async () => {
+  // ====== Envío rápido ======
+  const doSend = () => {
     const body = (text || "").trim();
-    if (!conversationId || !body || sending || !canWrite) return;
+    if (!conversationId || !body || !canWrite) return;
 
-    setSending(true);
-    try {
-      const r = await sendMessage({ to: String(conversationId), text: body });
-      const serverConvId = r?.results?.[0]?.to;
+    setText("");
+    requestAnimationFrame(() => textareaRef.current?.focus());
 
-      if (serverConvId && serverConvId !== conversationId) {
-        navigate(`/app/${encodeURIComponent(serverConvId)}`, { replace: true });
-      }
-
-      if (r && r.ok === false) {
-        const err = r?.results?.[0]?.error;
-        const code =
-          err?.error?.code ?? err?.code ?? (typeof err === "string" ? err : "");
-        alert(`No se pudo enviar.\nCódigo: ${code || "desconocido"}`);
-      }
-
-      setText("");
-    } catch (e) {
-      alert(e?.message || "No se pudo enviar");
-    } finally {
-      setSending(false);
-    }
+    sendMessage({ to: String(conversationId), text: body, conversationId })
+      .then((r) => {
+        const serverConvId = r?.results?.[0]?.to;
+        if (serverConvId && serverConvId !== conversationId) {
+          navigate(`/app/${encodeURIComponent(serverConvId)}`, { replace: true });
+        }
+        if (r && r.ok === false) {
+          const err = r?.results?.[0]?.error;
+          const code =
+            err?.error?.code ?? err?.code ?? (typeof err === "string" ? err : "");
+          alert(`No se pudo enviar.\nCódigo: ${code || "desconocido"}`);
+        }
+      })
+      .catch((e) => {
+        alert(e?.message || "No se pudo enviar");
+      });
   };
 
   const onMsgKeyDown = (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.altKey) {
       e.preventDefault();
       doSend();
     }
   };
+
+  // autoresize textarea
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "0px";
+    const h = Math.min(160, Math.max(36, el.scrollHeight));
+    el.style.height = h + "px";
+  }, [text]);
 
   // contexto para plantillas
   const templateContext = {
@@ -220,56 +239,140 @@ export default function ChatWindow({ conversationId }) {
     [conversationId, phone]
   );
 
+  // ======= ENVÍO DE IMAGEN / AUDIO =======
+  const handlePickAndSend = async (file, kind /* "image" | "audio" */) => {
+    if (!file || !conversationId || !canWrite) return;
+    try {
+      setSending(true);
+      const dest = `uploads/${conversationId}/${Date.now()}_${file.name}`;
+      const { url } = await uploadFile(file, dest);
+      const payload =
+        kind === "image" ? { image: { link: url } } : { audio: { link: url } };
+      await sendMessage({
+        to: String(conversationId),
+        conversationId,
+        ...payload,
+      });
+    } catch (err) {
+      alert(err?.message || `No se pudo enviar el ${kind}`);
+    } finally {
+      setSending(false);
+      setShowAttachMenu(false);
+    }
+  };
+
+  const onPickImage = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (file) await handlePickAndSend(file, "image");
+  };
+
+  const onPickAudio = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (file) await handlePickAndSend(file, "audio");
+  };
+
+  // cerrar menú en click afuera / escape
+  useEffect(() => {
+    if (!showAttachMenu) return;
+    const onDocClick = (e) => {
+      if (!attachBtnRef.current) return;
+      const menu = document.getElementById("attach-menu");
+      if (
+        !attachBtnRef.current.contains(e.target) &&
+        menu &&
+        !menu.contains(e.target)
+      ) {
+        setShowAttachMenu(false);
+      }
+    };
+    const onEsc = (e) => e.key === "Escape" && setShowAttachMenu(false);
+    document.addEventListener("click", onDocClick);
+    document.addEventListener("keydown", onEsc);
+    return () => {
+      document.removeEventListener("click", onDocClick);
+      document.removeEventListener("keydown", onEsc);
+    };
+  }, [showAttachMenu]);
+
   return (
-    <div className="flex flex-col h-full text-black bg-[#F6FBF7]">
-      {/* Header (2 filas) */}
+    <div className="flex h-full flex-col text-black bg-[#F6FBF7]">
+      {/* Header */}
       <header className="sticky top-0 z-40 border-b bg-[#E8F5E9]/90 border-[#CDEBD6] backdrop-blur">
-        <div className="px-4 pt-2 pb-2 space-y-2">
-          {/* Fila 1: título + acciones */}
-          <div className="flex items-center justify-between gap-2">
-            <div className="min-w-0">
-              <div className="text-xs">Conversación</div>
-              <h2 className="text-lg font-semibold truncate">
-                {contact?.name || String(conversationId || "")}
-              </h2>
+        <div className="px-3 pt-2 pb-2 md:px-4">
+          {/* Fila 1 */}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center min-w-0 gap-2">
+              {onBack && (
+                <button
+                  className="btn btn-xs md:hidden"
+                  onClick={onBack}
+                  title="Volver a la lista"
+                >
+                  ← Volver
+                </button>
+              )}
+              <div className="min-w-0">
+                <div className="text-[11px] md:text-xs">Conversación</div>
+                <h2 className="text-base font-semibold truncate md:text-lg">
+                  {contact?.name || String(conversationId || "")}
+                </h2>
+              </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              <TemplatesPicker
-                mode="modal"
-                anchorToBody
-                backdrop
-                onInsert={(txt) => {
-                  setText((prev) => (prev ? prev + "\n" + txt : txt));
-                  requestAnimationFrame(() => textareaRef.current?.focus());
-                }}
-                context={templateContext}
+            <div className="shrink-0">
+              <StagePicker
+                conversationId={conversationId}
+                value={convMeta?.stage}
+                className="md:btn-sm btn-xs"
               />
-              <button
-                className="text-black btn btn-sm bg-white hover:bg-[#F1FAF3] border border-[#CDEBD6]"
-                onClick={() => setShowTags(true)}
-                title="Etiquetar conversación"
-              >
-                Etiquetar
-              </button>
-              <button
-                className="text-black btn btn-sm bg-white hover:bg-[#F1FAF3] border border-[#CDEBD6]"
-                onClick={() => setShowProfile((v) => !v)}
-                title="Ver perfil del cliente"
-              >
-                Perfil
-              </button>
-              <div className="shrink-0">
-                <StagePicker
-                  conversationId={conversationId}
-                  value={convMeta?.stage}
-                />
-              </div>
             </div>
           </div>
 
-          {/* Fila 2: chips (solo etiquetas) */}
-          <div className="flex items-center gap-2 overflow-x-auto px-0.5 pb-1">
+          {/* Fila 2: Toolbar con íconos */}
+          <div className="mt-2 -mx-1 overflow-x-auto no-scrollbar">
+            <div className="flex items-center gap-2 px-1 snap-x snap-mandatory">
+             {/* Botón Plantillas (estilo iconito) */}
+<div className="snap-start shrink-0">
+  <TemplatesPicker
+    mode="modal"
+    anchorToBody
+    backdrop
+    // 👉 ícono redondo, compacto y con borde como los otros
+    buttonClassName="btn btn-circle btn-sm bg-white text-black hover:bg-[#F1FAF3] border border-[#CDEBD6]"
+    buttonChildren={<FileText className="w-4 h-4" />}
+    onInsert={(txt) => {
+      setText((prev) => (prev ? prev + "\n" + txt : txt));
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    }}
+    context={templateContext}
+    buttonAriaLabel="Plantillas"
+  />
+</div>
+
+              <button
+                className="snap-start btn btn-xs md:btn-sm bg-white text-black hover:bg-[#F1FAF3] border border-[#CDEBD6] gap-2"
+                onClick={() => setShowTags(true)}
+                title="Etiquetar conversación"
+              >
+                <TagsIcon className="w-4 h-4" />
+                <span className="hidden xs:inline">Etiquetar</span>
+              </button>
+
+              <button
+                className="snap-start btn btn-xs md:btn-sm bg-white text-black hover:bg-[#F1FAF3] border border-[#CDEBD6] gap-2"
+                onClick={() => setShowProfile((v) => !v)}
+                title="Ver perfil del cliente"
+              >
+                <UserRound className="w-4 h-4" />
+                <span className="hidden xs:inline">Perfil</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Fila 3: chips de etiquetas */}
+          <div className="mt-2 flex items-center gap-2 overflow-x-auto px-0.5 pb-1 no-scrollbar">
             {convSlugs.map((slug) => {
               const l = getLabel(slug);
               return (
@@ -293,9 +396,9 @@ export default function ChatWindow({ conversationId }) {
         </div>
       </header>
 
-      {/* ⭐ pestañas */}
-      <div className="px-4 pt-2">
-        <div className="flex overflow-hidden border rounded bg-white/70 border-[#CDEBD6]">
+      {/* Tabs */}
+      <div className="px-3 pt-2 md:px-4">
+        <div className="flex overflow-hidden rounded border bg-white/70 border-[#CDEBD6]">
           <button
             className={
               "px-3 py-1 text-sm transition-colors " +
@@ -321,12 +424,11 @@ export default function ChatWindow({ conversationId }) {
         </div>
       </div>
 
-      {/* Contenido principal */}
+      {/* Contenido */}
       {tab === "chat" ? (
-        // ====== Vista chat ======
-        <main ref={viewportRef} className="flex-1 px-4 py-4 overflow-y-auto">
+        <main ref={viewportRef} className="flex-1 px-3 py-3 overflow-y-auto md:px-4 md:py-4">
           {msgs.length === 0 && (
-            <div className="p-4 mx-auto text-sm text-center border rounded-xl bg-[#EAF7EE] border-[#CDEBD6]">
+            <div className="mx-auto rounded-xl border border-[#CDEBD6] bg-[#EAF7EE] p-4 text-center text-sm">
               Sin mensajes todavía.
             </div>
           )}
@@ -342,23 +444,26 @@ export default function ChatWindow({ conversationId }) {
                 m?.error?.code ??
                 (status === "error" ? "?" : "");
 
-              // texto visible (con fallback)
               const visibleText =
                 typeof m?.text === "string"
                   ? m.text
                   : m?.template
                   ? `[template] ${m.template}`
-                  : JSON.stringify(m?.text || "");
+                  : typeof m?.text === "object"
+                  ? JSON.stringify(m?.text || "")
+                  : m?.text || "";
 
-              // ⭐ Opción 2 (UI): sólo mostrar la estrella para estados permitidos
-              const allowStar = ["sent", "delivered", "read"].includes(status);
+              const mType = m?.type || "";
+              const mediaUrl =
+                m?.media?.url ||
+                m?.image?.link || m?.image?.url ||
+                m?.audio?.link || m?.audio?.url ||
+                null;
+
+          const allowStar = isOut ? ["sent", "delivered", "read"].includes(status) : true;
 
               return (
-                <div
-                  key={m.id}
-                  className={`chat ${isOut ? "chat-end" : "chat-start"}`}
-                >
-                  {/* Burbuja + ⭐ (condicional) */}
+                <div key={m.id} className={`chat ${isOut ? "chat-end" : "chat-start"}`}>
                   <div className="flex items-center gap-2">
                     <div
                       className={
@@ -368,15 +473,24 @@ export default function ChatWindow({ conversationId }) {
                           : "bg-[#EAF7EE] text-black border border-[#CDEBD6]")
                       }
                     >
-                      {visibleText}
+                      {mType === "image" && mediaUrl ? (
+                        <img
+                          src={mediaUrl}
+                          alt=""
+                          className="max-w-[280px] md:max-w-[320px] rounded"
+                          loading="lazy"
+                        />
+                      ) : mType === "audio" && mediaUrl ? (
+                        <audio controls className="max-w-[280px] md:max-w-[320px]">
+                          <source src={mediaUrl} />
+                        </audio>
+                      ) : (
+                        visibleText
+                      )}
                     </div>
 
                     {allowStar && (
-                      <StarButton
-                        chatId={conversationId}
-                        messageId={m.id}
-                        texto={visibleText}
-                      />
+                      <StarButton chatId={conversationId} messageId={m.id} texto={visibleText} />
                     )}
                   </div>
 
@@ -398,41 +512,100 @@ export default function ChatWindow({ conversationId }) {
           </div>
         </main>
       ) : (
-        // ====== Vista destacados ======
-        <main className="flex-1 px-4 py-4 overflow-y-auto">
+        <main className="flex-1 px-3 py-3 overflow-y-auto md:px-4 md:py-4">
           <ChatDestacadosPanel chatId={conversationId} />
         </main>
       )}
 
       {/* Input */}
-      <div className="border-t bg-[#F6FBF7] border-[#CDEBD6]">
-        <div className="px-4 py-3">
+      <div className="border-t border-[#CDEBD6] bg-[#F6FBF7]">
+        <div className="px-3 py-3 md:px-4">
           <div className="flex flex-col w-full gap-2 mx-auto max-w-none">
             <QuickRepliesBar onPick={onPickQuick} />
 
-            <div className="flex items-end gap-2 p-2 border shadow-sm rounded-xl bg-white border-[#CDEBD6]">
+            {/* Caja de redacción compacta */}
+            <div className="relative flex items-end gap-2 rounded-xl border border-[#CDEBD6] bg-white p-2 shadow-sm">
+              {/* pickers ocultos */}
+              <input ref={imageInputRef} type="file" accept="image/*" hidden onChange={onPickImage} />
+              <input ref={audioInputRef} type="file" accept="audio/*" hidden onChange={onPickAudio} />
+
+              {/* === Botón único de adjuntos con menú === */}
+              <div className="relative">
+                <button
+                  ref={attachBtnRef}
+                  className="btn btn-square btn-sm border border-[#CDEBD6] bg-white text-black hover:bg-[#F1FAF3]"
+                  disabled={!canWrite || sending}
+                  onClick={() => setShowAttachMenu((v) => !v)}
+                  aria-haspopup="menu"
+                  aria-expanded={showAttachMenu}
+                  title="Adjuntar (imagen, audio, grabar)"
+                >
+                  <Paperclip className="w-4 h-4" />
+                </button>
+
+                {showAttachMenu && (
+                  <div
+                    id="attach-menu"
+                    className="absolute bottom-[110%] left-0 z-50 rounded-xl border border-[#CDEBD6] bg-white shadow-md p-1 w-40"
+                  >
+                    <button
+                      className="justify-start w-full gap-2 btn btn-ghost btn-sm"
+                      onClick={() => imageInputRef.current?.click()}
+                      disabled={!canWrite || sending}
+                    >
+                      <ImageIcon className="w-4 h-4" />
+                      Imagen
+                    </button>
+                    <button
+                      className="justify-start w-full gap-2 btn btn-ghost btn-sm"
+                      onClick={() => audioInputRef.current?.click()}
+                      disabled={!canWrite || sending}
+                    >
+                      <FileAudio2 className="w-4 h-4" />
+                      Audio
+                    </button>
+                    <div className="w-full">
+                      {/* El botón de grabar mantiene tu mismo componente/lógica */}
+                      <AudioRecorderButton
+                        conversationId={conversationId}
+                        canWrite={canWrite}
+                        // cierre del menú cuando inicia/graba/envía (si tu componente expone callbacks, podés cerrarlo allí)
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Textarea compacto con autoresize */}
               <textarea
                 ref={textareaRef}
-                className="textarea textarea-bordered w-full min-h-[48px] max-h-40 resize-y text-black placeholder:text-black/60 border-[#CDEBD6] focus:border-[#2E7D32]"
+                rows={1}
+                className="textarea textarea-bordered w-full min-h-[36px] max-h-40 resize-none leading-tight text-black placeholder:text-black/60 border-[#CDEBD6] focus:border-[#2E7D32]"
                 placeholder={
                   canWrite
-                    ? "Escribí un mensaje… (Enter para enviar)"
+                    ? "Escribí un mensaje… (Enter para enviar, Shift+Enter salto)"
                     : "Conversación asignada a otro agente"
                 }
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={onMsgKeyDown}
                 disabled={!canWrite}
+                autoComplete="off"
+                autoCorrect="on"
+                autoCapitalize="sentences"
+                spellCheck={true}
               />
 
+              {/* Enviar */}
               <button
                 onClick={doSend}
-                disabled={!text.trim() || sending || !canWrite}
-                className="btn"
+                disabled={!text.trim() || !canWrite}
+                className="gap-2 btn"
                 style={{ backgroundColor: "#2E7D32", borderColor: "#2E7D32", color: "#fff" }}
                 title="Enviar (Enter)"
               >
-                {sending ? "Enviando…" : "Enviar"}
+                <SendIcon className="w-4 h-4" />
+                <span className="hidden sm:inline">Enviar</span>
               </button>
             </div>
           </div>
@@ -441,22 +614,15 @@ export default function ChatWindow({ conversationId }) {
 
       {/* Drawer de perfil */}
       {showProfile && (
-        <div className="fixed inset-y-0 right-0 w-full max-w-md bg-base-100 shadow-xl border-l z-[80] border-[#CDEBD6]">
-          <div className="flex items-center justify-between p-3 border-b border-[#CDEBD6]">
+        <div className="fixed inset-y-0 right-0 z-[80] w-full max-w-md border-l border-[#CDEBD6] bg-base-100 shadow-xl">
+          <div className="flex items-center justify-between border-b border-[#CDEBD6] p-3">
             <h3 className="font-semibold">Perfil de cliente</h3>
-            <button
-              className="btn btn-ghost btn-sm"
-              onClick={() => setShowProfile(false)}
-            >
+            <button className="btn btn-ghost btn-sm" onClick={() => setShowProfile(false)}>
               Cerrar
             </button>
           </div>
           <div className="h-full p-3 overflow-auto">
-            <ClientProfile
-              contactId={contactId}
-              phone={phone}
-              conversationId={conversationId}
-            />
+            <ClientProfile contactId={contactId} phone={phone} conversationId={conversationId} />
           </div>
         </div>
       )}
@@ -464,19 +630,16 @@ export default function ChatWindow({ conversationId }) {
       {/* Modal de etiquetas */}
       {showTags && (
         <div
-          className="fixed inset-0 z-[90] bg-black/40 grid place-items-center p-4"
+          className="fixed inset-0 z-[90] grid place-items-center bg-black/40 p-4"
           onClick={() => setShowTags(false)}
         >
           <div
-            className="w-full max-w-md shadow-xl bg-base-100 rounded-xl"
+            className="w-full max-w-md shadow-xl rounded-xl bg-base-100"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between p-3 border-b">
               <h3 className="font-semibold">Etiquetas</h3>
-              <button
-                className="btn btn-ghost btn-sm"
-                onClick={() => setShowTags(false)}
-              >
+              <button className="btn btn-ghost btn-sm" onClick={() => setShowTags(false)}>
                 Cerrar
               </button>
             </div>

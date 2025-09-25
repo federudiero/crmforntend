@@ -15,6 +15,11 @@ export default function TemplatesPicker({
   anchorToBody = true,
   backdrop = true,
   mode = "modal", // "modal" centrado | "panel" anclado
+
+  // 🔽 NUEVO: personalización del botón disparador
+  buttonClassName = "text-black btn btn-sm bg-base-200",
+  buttonChildren = "Plantillas",
+  buttonAriaLabel = "Plantillas",
 }) {
   const [items, setItems] = useState([]);
   const [open, setOpen] = useState(false);
@@ -119,7 +124,10 @@ export default function TemplatesPicker({
         style={{
           left: coords.left,
           top: coords.top,
-          width: Math.min(coords.width, typeof window !== "undefined" ? window.innerWidth - 16 : 420),
+          width: Math.min(
+            coords.width,
+            typeof window !== "undefined" ? window.innerWidth - 16 : 420
+          ),
           maxWidth: "95vw",
         }}
       >
@@ -178,7 +186,7 @@ export default function TemplatesPicker({
         <div className="w-[min(560px,92vw)] max-h-[85vh] overflow-hidden rounded-2xl border bg-base-100 shadow-2xl">
           <div className="flex items-center gap-2 p-3 border-b">
             <input
-              className="w-full input input-sm input-bordered"
+              className="w/full input input-sm input-bordered"
               placeholder="Buscar plantilla…"
               value={q}
               onChange={(e) => setQ(e.target.value)}
@@ -236,14 +244,16 @@ export default function TemplatesPicker({
     <div className="inline-block">
       <button
         ref={btnRef}
-        className="text-black btn btn-sm bg-base-200"
         type="button"
+        className={buttonClassName}
+        aria-label={buttonAriaLabel}
+        title={buttonAriaLabel}
         onClick={() => setOpen((o) => !o)}
       >
-        Plantillas
+        {buttonChildren}
       </button>
 
-      {/* Cuando anchorToBody=true, renderizamos en portal para evitar transform/overflow de ancestros */}
+      {/* Cuando anchorToBody=true, renderizamos en portal */}
       {open && anchorToBody ? (
         <Portal>{mode === "modal" ? ModalCentered : PanelFloating}</Portal>
       ) : (
