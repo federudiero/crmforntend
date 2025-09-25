@@ -246,6 +246,9 @@ export default function ChatWindow({ conversationId, onBack }) {
       setSending(true);
       const dest = `uploads/${conversationId}/${Date.now()}_${file.name}`;
       const { url } = await uploadFile(file, dest);
+      console.log('VITE_API_BASE =', import.meta.env.VITE_API_BASE);
+// Debe mostrar: https://crmbackend-chi.vercel.app
+
       const payload =
         kind === "image" ? { image: { link: url } } : { audio: { link: url } };
       await sendMessage({
