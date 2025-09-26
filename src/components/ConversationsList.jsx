@@ -320,6 +320,11 @@ export default function ConversationsList({ activeId, onSelect }) {
                       <div className="font-mono text-sm truncate">
                         {c.contact?.name || c.id}
                       </div>
+                      {c.lastMessageText && (
+                        <div className="text-xs text-gray-600 truncate mt-1">
+                          {c.lastMessageText}
+                        </div>
+                      )}
                       <div className="text-[11px] text-gray-500">
                         {formatShort(c.lastMessageAt)}
                       </div>
