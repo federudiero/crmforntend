@@ -1,6 +1,7 @@
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
+import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -14,3 +15,15 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+
+// Inicializar Storage solo si el bucket está configurado
+let storage = null;
+try {
+  if (firebaseConfig.storageBucket) {
+    storage = getStorage(app);
+  }
+} catch (error) {
+  console.warn("Firebase Storage no está disponible:", error.message);
+}
+
+export { storage };
