@@ -1,4 +1,3 @@
-// src/components/ChatWindow.jsx
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -10,6 +9,7 @@ import {
   updateDoc,
   arrayRemove,
   getDoc,
+  serverTimestamp,
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { sendMessage } from "../services/api";
@@ -25,7 +25,6 @@ import AudioRecorderButton from "./AudioRecorderButton.jsx";
 import StarButton from "./StarButton.jsx";
 import ChatDestacadosPanel from "./ChatDestacadosPanel.jsx";
 
-// Íconos
 import {
   Image as ImageIcon,
   FileAudio2,
@@ -37,29 +36,28 @@ import {
 } from "lucide-react";
 
 function formatTs(ts) {
-  const d = ts?.toDate ? ts.toDate() : (ts ? new Date(ts) : null);
-  return d ? d.toLocaleString() : "";
+  if (!ts) return "";
+  return new Date(ts.seconds * 1000).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
 }
 
-/** ChatWindow */
-export default function ChatWindow({ conversationId, onBack }) {
+export default function ChatWindow({ conversationId, convMeta, onBack }) {
   const navigate = useNavigate();
   const { user } = useAuthState();
 
-  // mensajes
+  // Estados principales
   const [msgs, setMsgs] = useState([]);
   const [sending, setSending] = useState(false); // bloquea sólo adjuntos mientras suben
   const [text, setText] = useState("");
 
-  // labels
+  // Estados para etiquetas
   const [convSlugs, setConvSlugs] = useState([]);
   const [allLabels, setAllLabels] = useState([]);
 
-  // contacto + meta conversación
+  // Estados para contacto y metadata
   const [contact, setContact] = useState(null);
-  const [convMeta, setConvMeta] = useState(null);
+  const [localConvMeta, setLocalConvMeta] = useState(null);
 
-  // UI
+  // Estados de UI
   const [showProfile, setShowProfile] = useState(false);
   const [showTags, setShowTags] = useState(false);
   const [tab, setTab] = useState("chat");
@@ -71,151 +69,173 @@ export default function ChatWindow({ conversationId, onBack }) {
   const audioInputRef = useRef(null);
   const attachBtnRef = useRef(null);
 
-  // catálogo de etiquetas
+  // Usar convMeta del prop o el local
+  const currentConvMeta = convMeta || localConvMeta;
+
+  // Verificar si es admin
+  const isAdmin =
+    !!user?.email &&
+    ["federudiero@gmail.com", "fede_rudiero@gmail.com"].includes(user.email);
+
+  const canRead = useMemo(() => {
+    if (!currentConvMeta) return false;
+    if (isAdmin) return true;
+    return currentConvMeta.assignedToUid === user?.uid;
+  }, [currentConvMeta?.assignedToUid, user?.uid, isAdmin]);
+
+  const canWrite = useMemo(() => {
+    if (!currentConvMeta) return false;
+    if (isAdmin) return true;
+    return currentConvMeta.assignedToUid === user?.uid;
+  }, [currentConvMeta?.assignedToUid, user?.uid, isAdmin]);
+
+  // Cargar metadata local si no viene del prop
+  useEffect(() => {
+    if (!conversationId || convMeta) return;
+    
+    const unsubscribe = onSnapshot(doc(db, "conversations", conversationId), (snap) => {
+      if (snap.exists()) {
+        setLocalConvMeta(snap.data());
+      }
+    });
+
+    return unsubscribe;
+  }, [conversationId]);
+
+  // Cargar etiquetas
   useEffect(() => {
     (async () => {
       try {
-        const arr = await listLabels();
-        setAllLabels(arr || []);
-      } catch {
-        setAllLabels([]);
+        const labels = await listLabels();
+        setAllLabels(labels);
+      } catch (e) {
+        console.error("Error cargando etiquetas:", e);
       }
     })();
   }, []);
 
   const labelBySlug = useMemo(() => {
-    const map = new Map();
-    for (const l of allLabels) map.set(l.slug, l);
+    const map = {};
+    for (const l of allLabels) map[l.slug] = l;
     return map;
   }, [allLabels]);
 
   const getLabel = (slug) =>
-    labelBySlug.get(slug) || { name: slug, slug, color: "neutral" };
+    labelBySlug[slug] || { name: slug, color: "#666" };
 
-  // mensajes
   useEffect(() => {
-    if (!conversationId) {
-      setMsgs([]);
-      return;
-    }
-    const qRef = query(
-      collection(db, "conversations", String(conversationId), "messages"),
-      orderBy("timestamp", "asc")
-    );
-    const unsub = onSnapshot(
-      qRef,
+    if (!conversationId || !canRead) return;
+
+    const unsubscribe = onSnapshot(
+      query(
+        collection(db, "conversations", conversationId, "messages"),
+        orderBy("timestamp", "asc")
+      ),
       (snap) => {
-        const arr = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        setMsgs(arr);
-        if (tab === "chat") {
-          requestAnimationFrame(() => {
-            viewportRef.current?.scrollTo({ top: 1e9, behavior: "smooth" });
-          });
-        }
+        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setMsgs(list);
       },
-      (err) => console.error("onSnapshot(messages) error:", err)
+      (error) => {
+        console.error("Error en mensajes:", error);
+      }
     );
-    return () => unsub();
+
+    return unsubscribe;
   }, [conversationId, tab]);
 
-  // meta conversación
+  // Cargar metadata de conversación y etiquetas
   useEffect(() => {
     if (!conversationId) return;
-    const unsub = onSnapshot(
-      doc(db, "conversations", String(conversationId)),
-      (snap) => {
-        const data = snap.data() || {};
-        setConvSlugs(Array.isArray(data.labels) ? data.labels : []);
-        setConvMeta(data || null);
-      },
-      (err) => console.error("onSnapshot(conversation) error:", err)
-    );
-    return () => unsub();
-  }, [conversationId]);
 
-  // contacto
+    const unsubscribe = onSnapshot(
+      doc(db, "conversations", conversationId),
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          setConvSlugs(data.labelSlugs || []);
+          if (!convMeta) {
+            setLocalConvMeta(data);
+          }
+        }
+      },
+      (error) => {
+        console.error("Error en conversación:", error);
+      }
+    );
+
+    return unsubscribe;
+  }, [conversationId, convMeta]);
+
+  // Cargar contacto
   useEffect(() => {
+    if (!conversationId) return;
+
     (async () => {
       try {
-        if (!conversationId) {
-          setContact(null);
-          return;
+        const convSnap = await getDoc(doc(db, "conversations", conversationId));
+        if (convSnap.exists()) {
+          const convData = convSnap.data();
+          const phone = convData.clientPhone;
+          if (phone) {
+            const contactSnap = await getDoc(doc(db, "contacts", phone));
+            if (contactSnap.exists()) {
+              setContact(contactSnap.data());
+            }
+          }
         }
-        const c = await getDoc(doc(db, "contacts", String(conversationId)));
-        setContact(c.exists() ? c.data() : null);
       } catch (e) {
-        console.error("get contact error:", e);
+        console.error("Error cargando contacto:", e);
       }
     })();
   }, [conversationId]);
 
-  // permisos de envío
-  const isAdmin =
-    !!user?.email &&
-    ["federudiero@gmail.com", "fede_rudiero@gmail.com"].includes(user.email);
-
-  const canWrite = useMemo(() => {
-    if (isAdmin) return true;
-    const assignedToUid = convMeta?.assignedToUid || null;
-    if (!assignedToUid) return true; // libre
-    return assignedToUid === user?.uid;
-  }, [convMeta?.assignedToUid, user?.uid, isAdmin]);
-
-  // quitar etiqueta
   const removeTag = async (slug) => {
-    if (!conversationId || !slug) return;
     try {
-      await updateDoc(doc(db, "conversations", String(conversationId)), {
-        labels: arrayRemove(slug),
+      await updateDoc(doc(db, "conversations", conversationId), {
+        labelSlugs: arrayRemove(slug),
       });
-    } catch {
-      alert("No se pudo quitar la etiqueta.");
+    } catch (e) {
+      console.error("Error removiendo etiqueta:", e);
     }
   };
 
-  // ====== Envío rápido ======
   const doSend = () => {
-    const body = (text || "").trim();
-    if (!conversationId || !body || !canWrite) return;
+    if (!text.trim() || !canWrite) return;
 
-    setText("");
-    requestAnimationFrame(() => textareaRef.current?.focus());
-
-    sendMessage({ to: String(conversationId), text: body, conversationId })
-      .then((r) => {
-        const serverConvId = r?.results?.[0]?.to;
-        if (serverConvId && serverConvId !== conversationId) {
-          navigate(`/app/${encodeURIComponent(serverConvId)}`, { replace: true });
+    (async () => {
+      try {
+        await sendMessage({
+          conversationId,
+          text: text.trim(),
+          timestamp: serverTimestamp(),
+        });
+        setText("");
+        if (textareaRef.current) {
+          textareaRef.current.style.height = "auto";
         }
-        if (r && r.ok === false) {
-          const err = r?.results?.[0]?.error;
-          const code =
-            err?.error?.code ?? err?.code ?? (typeof err === "string" ? err : "");
-          alert(`No se pudo enviar.\nCódigo: ${code || "desconocido"}`);
-        }
-      })
-      .catch((e) => {
-        alert(e?.message || "No se pudo enviar");
-      });
+      } catch (e) {
+        console.error("Error enviando mensaje:", e);
+        alert("Error enviando mensaje");
+      }
+    })();
   };
 
   const onMsgKeyDown = (e) => {
-    if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.altKey) {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       doSend();
     }
   };
 
-  // autoresize textarea
+  // Auto-resize del textarea
   useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = "0px";
-    const h = Math.min(160, Math.max(36, el.scrollHeight));
-    el.style.height = h + "px";
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = textareaRef.current.scrollHeight + "px";
+    }
   }, [text]);
 
-  // contexto para plantillas
+  // Contexto para plantillas
   const templateContext = {
     nombre: contact?.name || contact?.fullName || "",
     vendedor: user?.displayName || user?.email || "",
@@ -224,78 +244,64 @@ export default function ChatWindow({ conversationId, onBack }) {
   };
 
   const onPickQuick = (t) => {
-    if (!t) return;
-    setText((prev) => (prev ? prev + (prev.endsWith("\n") ? "" : "\n") + t : t));
-    requestAnimationFrame(() => textareaRef.current?.focus());
+    setText((prev) => prev + (prev ? " " : "") + t.text);
+    if (textareaRef.current) textareaRef.current.focus();
   };
 
   const phone = useMemo(
-    () => convMeta?.clientPhone || contact?.phone || "",
+    () => convMeta?.clientPhone || contact?.phone,
     [convMeta?.clientPhone, contact?.phone]
   );
 
   const contactId = useMemo(
-    () => String(conversationId || phone || ""),
+    () => conversationId + "_" + phone,
     [conversationId, phone]
   );
 
-  // ======= ENVÍO DE IMAGEN / AUDIO =======
-  const handlePickAndSend = async (file, kind /* "image" | "audio" */) => {
-    if (!file || !conversationId || !canWrite) return;
+  const handleAssignToMe = async () => {
+    if (!user?.uid || !conversationId) return;
+    
     try {
-      setSending(true);
-      const dest = `uploads/${conversationId}/${Date.now()}_${file.name}`;
-      const { url } = await uploadFile(file, dest);
-      console.log('VITE_API_BASE =', import.meta.env.VITE_API_BASE);
-// Debe mostrar: https://crmbackend-chi.vercel.app
-
-      const payload =
-        kind === "image" ? { image: { link: url } } : { audio: { link: url } };
-      await sendMessage({
-        to: String(conversationId),
-        conversationId,
-        ...payload,
+      await updateDoc(doc(db, "conversations", conversationId), {
+        assignedToUid: user.uid,
+        assignedToName: user.displayName || user.email || "Usuario",
+        assignedAt: serverTimestamp(),
       });
-    } catch (err) {
-      alert(err?.message || `No se pudo enviar el ${kind}`);
-    } finally {
-      setSending(false);
-      setShowAttachMenu(false);
+    } catch (error) {
+      console.error("Error asignando conversación:", error);
+      alert("Error al asignar la conversación");
     }
   };
 
   const onPickImage = async (e) => {
     const file = e.target.files?.[0];
-    e.target.value = "";
-    if (file) await handlePickAndSend(file, "image");
+    if (!file || !canWrite) return;
+    // Implementar lógica de subida de imagen
   };
 
   const onPickAudio = async (e) => {
     const file = e.target.files?.[0];
-    e.target.value = "";
-    if (file) await handlePickAndSend(file, "audio");
+    if (!file || !canWrite) return;
+    // Implementar lógica de subida de audio
   };
 
-  // cerrar menú en click afuera / escape
+  // Cerrar menú de adjuntos al hacer clic fuera
   useEffect(() => {
     if (!showAttachMenu) return;
-    const onDocClick = (e) => {
-      if (!attachBtnRef.current) return;
-      const menu = document.getElementById("attach-menu");
+
+    const handleClickOutside = (e) => {
       if (
+        attachBtnRef.current &&
         !attachBtnRef.current.contains(e.target) &&
-        menu &&
-        !menu.contains(e.target)
+        !document.getElementById("attach-menu")?.contains(e.target)
       ) {
         setShowAttachMenu(false);
       }
     };
-    const onEsc = (e) => e.key === "Escape" && setShowAttachMenu(false);
-    document.addEventListener("click", onDocClick);
-    document.addEventListener("keydown", onEsc);
+
+    document.addEventListener("mousedown", handleClickOutside);
     return () => {
-      document.removeEventListener("click", onDocClick);
-      document.removeEventListener("keydown", onEsc);
+      document.removeEventListener("mousedown", handleClickOutside);
     };
   }, [showAttachMenu]);
 
@@ -304,7 +310,7 @@ export default function ChatWindow({ conversationId, onBack }) {
       {/* Header */}
       <header className="sticky top-0 z-40 border-b bg-[#E8F5E9]/90 border-[#CDEBD6] backdrop-blur">
         <div className="px-3 pt-2 pb-2 md:px-4">
-          {/* Fila 1 */}
+          {/* Título y controles principales */}
           <div className="flex flex-wrap gap-2 justify-between items-center">
             <div className="flex gap-2 items-center min-w-0">
               {onBack && (
@@ -333,26 +339,25 @@ export default function ChatWindow({ conversationId, onBack }) {
             </div>
           </div>
 
-          {/* Fila 2: Toolbar con íconos */}
+          {/* Botones de acción */}
           <div className="overflow-x-auto -mx-1 mt-2 no-scrollbar">
             <div className="flex gap-2 items-center px-1 snap-x snap-mandatory">
-             {/* Botón Plantillas (estilo iconito) */}
-<div className="snap-start shrink-0">
-  <TemplatesPicker
-    mode="modal"
-    anchorToBody
-    backdrop
-    // 👉 ícono redondo, compacto y con borde como los otros
-    buttonClassName="btn btn-circle btn-sm bg-white text-black hover:bg-[#F1FAF3] border border-[#CDEBD6]"
-    buttonChildren={<FileText className="w-4 h-4" />}
-    onInsert={(txt) => {
-      setText((prev) => (prev ? prev + "\n" + txt : txt));
-      requestAnimationFrame(() => textareaRef.current?.focus());
-    }}
-    context={templateContext}
-    buttonAriaLabel="Plantillas"
-  />
-</div>
+              {/* Plantillas */}
+              <div className="snap-start shrink-0">
+                <TemplatesPicker
+                  mode="modal"
+                  anchorToBody
+                  backdrop
+                  buttonClassName="btn btn-circle btn-sm bg-white text-black hover:bg-[#F1FAF3] border border-[#CDEBD6]"
+                  buttonChildren={<FileText className="w-4 h-4" />}
+                  onInsert={(txt) => {
+                    setText((prev) => prev + (prev ? " " : "") + txt);
+                    if (textareaRef.current) textareaRef.current.focus();
+                  }}
+                  context={templateContext}
+                  buttonAriaLabel="Plantillas"
+                />
+              </div>
 
               <button
                 className="snap-start btn btn-xs md:btn-sm bg-white text-black hover:bg-[#F1FAF3] border border-[#CDEBD6] gap-2"
@@ -365,7 +370,7 @@ export default function ChatWindow({ conversationId, onBack }) {
 
               <button
                 className="snap-start btn btn-xs md:btn-sm bg-white text-black hover:bg-[#F1FAF3] border border-[#CDEBD6] gap-2"
-                onClick={() => setShowProfile((v) => !v)}
+                onClick={() => setShowProfile(true)}
                 title="Ver perfil del cliente"
               >
                 <UserRound className="w-4 h-4" />
@@ -374,246 +379,292 @@ export default function ChatWindow({ conversationId, onBack }) {
             </div>
           </div>
 
-          {/* Fila 3: chips de etiquetas */}
+          {/* Etiquetas */}
           <div className="flex overflow-x-auto gap-2 items-center px-0.5 pb-1 mt-2 no-scrollbar">
             {convSlugs.map((slug) => {
-              const l = getLabel(slug);
+              const label = getLabel(slug);
               return (
-                <span
+                <div
                   key={slug}
-                  className={`badge ${"badge-" + l.color} gap-1 border whitespace-nowrap text-black`}
-                  title={l.slug}
+                  className="snap-start shrink-0 flex items-center gap-1 px-2 py-1 text-xs rounded-full border"
+                  style={{
+                    backgroundColor: label.color + "20",
+                    borderColor: label.color,
+                    color: label.color,
+                  }}
                 >
-                  {l.name}
+                  <span>{label.name}</span>
                   <button
-                    className="ml-1 hover:opacity-80"
                     onClick={() => removeTag(slug)}
-                    title="Quitar"
+                    className="hover:bg-black/10 rounded-full p-0.5"
+                    title="Quitar etiqueta"
                   >
                     ×
                   </button>
-                </span>
+                </div>
               );
             })}
           </div>
         </div>
       </header>
 
-      {/* Tabs */}
-      <div className="px-3 pt-2 md:px-4">
-        <div className="flex overflow-hidden rounded border bg-white/70 border-[#CDEBD6]">
-          <button
-            className={
-              "px-3 py-1 text-sm transition-colors " +
-              (tab === "chat"
-                ? "bg-[#2E7D32] text-white"
-                : "bg-transparent hover:bg-[#E8F5E9]")
-            }
-            onClick={() => setTab("chat")}
-          >
-            Chat
-          </button>
-          <button
-            className={
-              "px-3 py-1 text-sm transition-colors " +
-              (tab === "destacados"
-                ? "bg-[#2E7D32] text-white"
-                : "bg-transparent hover:bg-[#E8F5E9]")
-            }
-            onClick={() => setTab("destacados")}
-          >
-            Destacados
-          </button>
+      {/* Tabs - Solo si tiene acceso de lectura */}
+      {canRead && (
+        <div className="px-3 pt-2 md:px-4">
+          <div className="flex overflow-hidden rounded border bg-white/70 border-[#CDEBD6]">
+            <button
+              className={
+                "px-3 py-1 text-sm transition-colors " +
+                (tab === "chat"
+                  ? "bg-[#2E7D32] text-white"
+                  : "bg-transparent hover:bg-[#E8F5E9]")
+              }
+              onClick={() => setTab("chat")}
+            >
+              Chat
+            </button>
+            <button
+              className={
+                "px-3 py-1 text-sm transition-colors " +
+                (tab === "destacados"
+                  ? "bg-[#2E7D32] text-white"
+                  : "bg-transparent hover:bg-[#E8F5E9]")
+              }
+              onClick={() => setTab("destacados")}
+            >
+              Destacados
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Contenido */}
+      {/* Contenido principal */}
       {tab === "chat" ? (
         <main ref={viewportRef} className="overflow-y-auto flex-1 px-3 py-3 md:px-4 md:py-4">
-          {msgs.length === 0 && (
+          {!canRead ? (
+            <div className="mx-auto rounded-xl border border-red-300 bg-red-50 p-4 text-center text-sm text-red-700">
+              <div className="mb-3">
+                No tenés acceso a este chat. Asignate desde la lista.
+              </div>
+              <button
+                onClick={async () => {
+                  try {
+                    await handleAssignToMe();
+                  } catch (error) {
+                    console.error("Error:", error);
+                  }
+                }}
+                className="px-4 py-2 font-medium text-white bg-blue-600 rounded-lg transition-colors duration-200 hover:bg-blue-700"
+              >
+                Asignarme
+              </button>
+            </div>
+          ) : msgs.length === 0 ? (
             <div className="mx-auto rounded-xl border border-[#CDEBD6] bg-[#EAF7EE] p-4 text-center text-sm">
               Sin mensajes todavía.
             </div>
-          )}
+          ) : null}
 
           <div className="flex flex-col gap-3 mx-auto w-full max-w-none">
-            {msgs.map((m) => {
-              const isOut = m?.direction === "out";
-              const status = m?.status || "";
-              const toRawSent = m?.toRawSent || "";
-              const variant = m?.sendVariant || "";
-              const errCode =
-                m?.error?.error?.code ??
-                m?.error?.code ??
-                (status === "error" ? "?" : "");
-
-              const visibleText =
-                typeof m?.text === "string"
-                  ? m.text
-                  : m?.template
-                  ? `[template] ${m.template}`
-                  : typeof m?.text === "object"
-                  ? JSON.stringify(m?.text || "")
-                  : m?.text || "";
-
-              const mType = m?.type || "";
-              const mediaUrl =
-                m?.media?.url ||
-                m?.image?.link || m?.image?.url ||
-                m?.audio?.link || m?.audio?.url ||
-                null;
-
-          const allowStar = isOut ? ["sent", "delivered", "read"].includes(status) : true;
-
+            {canRead && msgs.map((m) => {
+              const isFromMe = m.from === "me";
               return (
-                <div key={m.id} className={`chat ${isOut ? "chat-end" : "chat-start"}`}>
-                  <div className="flex gap-2 items-center">
-                    <div
-                      className={
-                        "chat-bubble whitespace-pre-wrap shadow " +
-                        (isOut
-                          ? "chat-bubble-primary text-white"
-                          : "bg-[#EAF7EE] text-black border border-[#CDEBD6]")
-                      }
-                    >
-                      {mType === "image" && mediaUrl ? (
+                <div
+                  key={m.id}
+                  className={`flex ${isFromMe ? "justify-end" : "justify-start"}`}
+                >
+                  <div
+                    className={`max-w-[85%] rounded-2xl px-3 py-2 ${
+                      isFromMe
+                        ? "bg-[#2E7D32] text-white rounded-br-md"
+                        : "bg-white border border-[#CDEBD6] text-black rounded-bl-md"
+                    }`}
+                  >
+                    {m.type === "text" && (
+                      <div className="whitespace-pre-wrap break-words">
+                        {m.text}
+                      </div>
+                    )}
+                    {m.type === "image" && (
+                      <div>
                         <img
-                          src={mediaUrl}
-                          alt=""
-                          className="max-w-[280px] md:max-w-[320px] rounded"
-                          loading="lazy"
+                          src={m.mediaUrl}
+                          alt="Imagen"
+                          className="max-w-full rounded-lg"
                         />
-                      ) : mType === "audio" && mediaUrl ? (
-                        <audio controls className="max-w-[280px] md:max-w-[320px]">
-                          <source src={mediaUrl} />
+                        {m.caption && (
+                          <div className="mt-2 whitespace-pre-wrap break-words">
+                            {m.caption}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {m.type === "audio" && (
+                      <div>
+                        <audio controls className="max-w-full">
+                          <source src={m.mediaUrl} type="audio/mpeg" />
                         </audio>
-                      ) : (
-                        visibleText
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between gap-2 mt-1">
+                      <div
+                        className={`text-xs ${
+                          isFromMe ? "text-white/70" : "text-black/50"
+                        }`}
+                      >
+                        {formatTs(m.timestamp)}
+                      </div>
+                      {canWrite && (
+                        <StarButton
+                          chatId={conversationId}
+                          messageId={m.id}
+                          texto={m.text || m.caption || ""}
+                        />
                       )}
                     </div>
-
-                    {allowStar && (
-                      <StarButton chatId={conversationId} messageId={m.id} texto={visibleText} />
-                    )}
-                  </div>
-
-                  <div className="chat-footer mt-1 text-[10px]">
-                    {formatTs(m?.timestamp)}
-                    {isOut && (
-                      <>
-                        {" • "}
-                        {status === "error" ? "❌ no enviado" : "✅ enviado"}
-                        {toRawSent ? ` • a ${toRawSent}` : ""}
-                        {variant ? ` (${variant})` : ""}
-                        {status === "error" && errCode ? ` • code ${errCode}` : ""}
-                      </>
-                    )}
                   </div>
                 </div>
               );
             })}
           </div>
         </main>
+      ) : canRead ? (
+        <main className="overflow-y-auto flex-1 px-3 py-3 md:px-4 md:py-4">
+          {canWrite ? (
+            <ChatDestacadosPanel chatId={conversationId} />
+          ) : (
+            <div className="mx-auto rounded-xl border border-red-300 bg-red-50 p-4 text-center text-sm text-red-700">
+              No tenés permisos para ver destacados en esta conversación.
+            </div>
+          )}
+        </main>
       ) : (
         <main className="overflow-y-auto flex-1 px-3 py-3 md:px-4 md:py-4">
-          <ChatDestacadosPanel chatId={conversationId} />
+          <div className="mx-auto rounded-xl border border-red-300 bg-red-50 p-4 text-center text-sm text-red-700">
+            <div className="mb-3">
+              No tenés acceso a este chat. Asignate desde la lista.
+            </div>
+            <button
+              onClick={async () => {
+                try {
+                  await handleAssignToMe();
+                } catch (error) {
+                  console.error("Error:", error);
+                }
+              }}
+              className="px-4 py-2 font-medium text-white bg-blue-600 rounded-lg transition-colors duration-200 hover:bg-blue-700"
+            >
+              Asignarme
+            </button>
+          </div>
         </main>
       )}
 
-      {/* Input */}
-      <div className="border-t border-[#CDEBD6] bg-[#F6FBF7]">
-        <div className="px-3 py-3 md:px-4">
-          <div className="flex flex-col gap-2 mx-auto w-full max-w-none">
-            <QuickRepliesBar onPick={onPickQuick} />
+      {/* Área de entrada de mensajes - Solo si tiene acceso de lectura */}
+      {canRead && (
+        <div className="border-t border-[#CDEBD6] bg-[#F6FBF7]">
+          <div className="px-3 py-3 md:px-4">
+            <div className="flex flex-col gap-2 mx-auto w-full max-w-none">
+              <QuickRepliesBar onPick={onPickQuick} />
 
-            {/* Caja de redacción compacta */}
-            <div className="relative flex items-end gap-2 rounded-xl border border-[#CDEBD6] bg-white p-2 shadow-sm">
-              {/* pickers ocultos */}
-              <input ref={imageInputRef} type="file" accept="image/*" hidden onChange={onPickImage} />
-              <input ref={audioInputRef} type="file" accept="audio/*" hidden onChange={onPickAudio} />
-
-              {/* === Botón único de adjuntos con menú === */}
-              <div className="relative">
-                <button
-                  ref={attachBtnRef}
-                  className="btn btn-square btn-sm border border-[#CDEBD6] bg-white text-black hover:bg-[#F1FAF3]"
-                  disabled={!canWrite || sending}
-                  onClick={() => setShowAttachMenu((v) => !v)}
-                  aria-haspopup="menu"
-                  aria-expanded={showAttachMenu}
-                  title="Adjuntar (imagen, audio, grabar)"
-                >
-                  <Paperclip className="w-4 h-4" />
-                </button>
-
-                {showAttachMenu && (
-                  <div
-                    id="attach-menu"
-                    className="absolute bottom-[110%] left-0 z-50 rounded-xl border border-[#CDEBD6] bg-white shadow-md p-1 w-40"
+              <div className="relative flex items-end gap-2 rounded-xl border border-[#CDEBD6] bg-white p-2 shadow-sm">
+                {/* Botón de adjuntos */}
+                <div className="relative">
+                  <button
+                    ref={attachBtnRef}
+                    className="btn btn-square btn-sm border border-[#CDEBD6] bg-white text-black hover:bg-[#F1FAF3]"
+                    disabled={!canWrite || sending}
+                    onClick={() => setShowAttachMenu(!showAttachMenu)}
+                    aria-haspopup="menu"
+                    aria-expanded={showAttachMenu}
+                    title="Adjuntar (imagen, audio, grabar)"
                   >
-                    <button
-                      className="gap-2 justify-start w-full btn btn-ghost btn-sm"
-                      onClick={() => imageInputRef.current?.click()}
-                      disabled={!canWrite || sending}
+                    <Paperclip className="w-4 h-4" />
+                  </button>
+
+                  {showAttachMenu && (
+                    <div
+                      id="attach-menu"
+                      className="absolute bottom-[110%] left-0 z-50 rounded-xl border border-[#CDEBD6] bg-white shadow-md p-1 w-40"
                     >
-                      <ImageIcon className="w-4 h-4" />
-                      Imagen
-                    </button>
-                    <button
-                      className="gap-2 justify-start w-full btn btn-ghost btn-sm"
-                      onClick={() => audioInputRef.current?.click()}
-                      disabled={!canWrite || sending}
-                    >
-                      <FileAudio2 className="w-4 h-4" />
-                      Audio
-                    </button>
-                    <div className="w-full">
-                      {/* El botón de grabar mantiene tu mismo componente/lógica */}
-                      <AudioRecorderButton
-                        conversationId={conversationId}
-                        canWrite={canWrite}
-                        // cierre del menú cuando inicia/graba/envía (si tu componente expone callbacks, podés cerrarlo allí)
-                      />
+                      <button
+                        className="gap-2 justify-start w-full btn btn-ghost btn-sm"
+                        onClick={() => imageInputRef.current?.click()}
+                        disabled={!canWrite || sending}
+                      >
+                        <ImageIcon className="w-4 h-4" />
+                        Imagen
+                      </button>
+                      <button
+                        className="gap-2 justify-start w-full btn btn-ghost btn-sm"
+                        onClick={() => audioInputRef.current?.click()}
+                        disabled={!canWrite || sending}
+                      >
+                        <FileAudio2 className="w-4 h-4" />
+                        Audio
+                      </button>
+                      <div className="w-full">
+                        <AudioRecorderButton
+                          conversationId={conversationId}
+                          canWrite={canWrite}
+                        />
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
+
+                {/* Textarea */}
+                <textarea
+                  ref={textareaRef}
+                  rows={1}
+                  className="textarea textarea-bordered w-full min-h-[36px] max-h-40 resize-none leading-tight text-black placeholder:text-black/60 border-[#CDEBD6] focus:border-[#2E7D32]"
+                  placeholder={
+                    canWrite
+                      ? "Escribí un mensaje… (Enter para enviar, Shift+Enter salto)"
+                      : "Conversación asignada a otro agente"
+                  }
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  onKeyDown={onMsgKeyDown}
+                  disabled={!canWrite}
+                  autoComplete="off"
+                  autoCorrect="on"
+                  autoCapitalize="sentences"
+                  spellCheck={true}
+                />
+
+                {/* Botón enviar */}
+                <button
+                  onClick={doSend}
+                  disabled={!text.trim() || !canWrite}
+                  className="gap-2 btn"
+                  style={{ backgroundColor: "#2E7D32", borderColor: "#2E7D32", color: "#fff" }}
+                  title="Enviar (Enter)"
+                >
+                  <SendIcon className="w-4 h-4" />
+                  <span className="hidden sm:inline">Enviar</span>
+                </button>
               </div>
-
-              {/* Textarea compacto con autoresize */}
-              <textarea
-                ref={textareaRef}
-                rows={1}
-                className="textarea textarea-bordered w-full min-h-[36px] max-h-40 resize-none leading-tight text-black placeholder:text-black/60 border-[#CDEBD6] focus:border-[#2E7D32]"
-                placeholder={
-                  canWrite
-                    ? "Escribí un mensaje… (Enter para enviar, Shift+Enter salto)"
-                    : "Conversación asignada a otro agente"
-                }
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                onKeyDown={onMsgKeyDown}
-                disabled={!canWrite}
-                autoComplete="off"
-                autoCorrect="on"
-                autoCapitalize="sentences"
-                spellCheck={true}
-              />
-
-              {/* Enviar */}
-              <button
-                onClick={doSend}
-                disabled={!text.trim() || !canWrite}
-                className="gap-2 btn"
-                style={{ backgroundColor: "#2E7D32", borderColor: "#2E7D32", color: "#fff" }}
-                title="Enviar (Enter)"
-              >
-                <SendIcon className="w-4 h-4" />
-                <span className="hidden sm:inline">Enviar</span>
-              </button>
             </div>
           </div>
+
+          {/* Inputs ocultos para archivos */}
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={onPickImage}
+          />
+          <input
+            ref={audioInputRef}
+            type="file"
+            accept="audio/*"
+            className="hidden"
+            onChange={onPickAudio}
+          />
         </div>
-      </div>
+      )}
 
       {/* Drawer de perfil */}
       {showProfile && (
