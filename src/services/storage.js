@@ -18,6 +18,10 @@ async function uploadViaBackend(file, conversationId) {
 }
 
 async function uploadViaSDK(file, destPath, opts = {}) {
+  if (!storage) {
+    throw new Error("Firebase Storage no está disponible. Verifica la configuración del bucket.");
+  }
+  
   const type = (file?.type || "").toLowerCase();
   const r = ref(storage, destPath);
   const task = uploadBytesResumable(r, file, {
@@ -63,8 +67,8 @@ export async function uploadFile(file, destPath, opts = {}) {
   // 1) intenta backend (robusto PC/móvil) → 2) si falla, SDK (habilitado por reglas)
   try {
     return await uploadViaBackend(file, conversationId);
-  } catch (e) {console.error(e)
-    // opcional: console.warn("Backend upload falló, usando SDK:", e?.message);
+  } catch (e) {
+    console.warn("Backend upload falló, usando SDK:", e?.message);
     return await uploadViaSDK(file, destPath, opts);
   }
 }

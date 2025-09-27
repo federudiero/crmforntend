@@ -20,10 +20,14 @@ export const db = getFirestore(app);
 let storage = null;
 try {
   if (firebaseConfig.storageBucket) {
+    console.log("Inicializando Firebase Storage con bucket:", firebaseConfig.storageBucket);
     storage = getStorage(app);
+    console.log("Firebase Storage inicializado correctamente");
+  } else {
+    console.warn("Storage bucket no configurado:", firebaseConfig.storageBucket);
   }
 } catch (error) {
-  console.warn("Firebase Storage no está disponible:", error.message);
+  console.error("Error inicializando Firebase Storage:", error.message);
 }
 
 export { storage };
