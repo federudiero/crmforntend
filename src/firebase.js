@@ -15,4 +15,15 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
-export const storage = getStorage(app);
+
+// Inicializar Storage solo si el bucket está configurado
+let storage = null;
+try {
+  if (firebaseConfig.storageBucket) {
+    storage = getStorage(app);
+  }
+} catch (error) {
+  console.warn("Firebase Storage no está disponible:", error.message);
+}
+
+export { storage };

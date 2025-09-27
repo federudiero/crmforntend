@@ -26,3 +26,5 @@ dist-ssr
 # 🔒 Ignorar la clave de Firebase Admin SDK
 scripts/serviceAccountKey.json
 scripts/serviceAccountKey.json.json
+
+.vercel
