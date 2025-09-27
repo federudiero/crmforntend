@@ -305,8 +305,8 @@ export default function ChatWindow({ conversationId, onBack }) {
       <header className="sticky top-0 z-40 border-b bg-[#E8F5E9]/90 border-[#CDEBD6] backdrop-blur">
         <div className="px-3 pt-2 pb-2 md:px-4">
           {/* Fila 1 */}
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center min-w-0 gap-2">
+          <div className="flex flex-wrap gap-2 justify-between items-center">
+            <div className="flex gap-2 items-center min-w-0">
               {onBack && (
                 <button
                   className="btn btn-xs md:hidden"
@@ -334,8 +334,8 @@ export default function ChatWindow({ conversationId, onBack }) {
           </div>
 
           {/* Fila 2: Toolbar con íconos */}
-          <div className="mt-2 -mx-1 overflow-x-auto no-scrollbar">
-            <div className="flex items-center gap-2 px-1 snap-x snap-mandatory">
+          <div className="overflow-x-auto -mx-1 mt-2 no-scrollbar">
+            <div className="flex gap-2 items-center px-1 snap-x snap-mandatory">
              {/* Botón Plantillas (estilo iconito) */}
 <div className="snap-start shrink-0">
   <TemplatesPicker
@@ -375,7 +375,7 @@ export default function ChatWindow({ conversationId, onBack }) {
           </div>
 
           {/* Fila 3: chips de etiquetas */}
-          <div className="mt-2 flex items-center gap-2 overflow-x-auto px-0.5 pb-1 no-scrollbar">
+          <div className="flex overflow-x-auto gap-2 items-center px-0.5 pb-1 mt-2 no-scrollbar">
             {convSlugs.map((slug) => {
               const l = getLabel(slug);
               return (
@@ -429,14 +429,14 @@ export default function ChatWindow({ conversationId, onBack }) {
 
       {/* Contenido */}
       {tab === "chat" ? (
-        <main ref={viewportRef} className="flex-1 px-3 py-3 overflow-y-auto md:px-4 md:py-4">
+        <main ref={viewportRef} className="overflow-y-auto flex-1 px-3 py-3 md:px-4 md:py-4">
           {msgs.length === 0 && (
             <div className="mx-auto rounded-xl border border-[#CDEBD6] bg-[#EAF7EE] p-4 text-center text-sm">
               Sin mensajes todavía.
             </div>
           )}
 
-          <div className="flex flex-col w-full gap-3 mx-auto max-w-none">
+          <div className="flex flex-col gap-3 mx-auto w-full max-w-none">
             {msgs.map((m) => {
               const isOut = m?.direction === "out";
               const status = m?.status || "";
@@ -467,7 +467,7 @@ export default function ChatWindow({ conversationId, onBack }) {
 
               return (
                 <div key={m.id} className={`chat ${isOut ? "chat-end" : "chat-start"}`}>
-                  <div className="flex items-center gap-2">
+                  <div className="flex gap-2 items-center">
                     <div
                       className={
                         "chat-bubble whitespace-pre-wrap shadow " +
@@ -515,7 +515,7 @@ export default function ChatWindow({ conversationId, onBack }) {
           </div>
         </main>
       ) : (
-        <main className="flex-1 px-3 py-3 overflow-y-auto md:px-4 md:py-4">
+        <main className="overflow-y-auto flex-1 px-3 py-3 md:px-4 md:py-4">
           <ChatDestacadosPanel chatId={conversationId} />
         </main>
       )}
@@ -523,7 +523,7 @@ export default function ChatWindow({ conversationId, onBack }) {
       {/* Input */}
       <div className="border-t border-[#CDEBD6] bg-[#F6FBF7]">
         <div className="px-3 py-3 md:px-4">
-          <div className="flex flex-col w-full gap-2 mx-auto max-w-none">
+          <div className="flex flex-col gap-2 mx-auto w-full max-w-none">
             <QuickRepliesBar onPick={onPickQuick} />
 
             {/* Caja de redacción compacta */}
@@ -552,7 +552,7 @@ export default function ChatWindow({ conversationId, onBack }) {
                     className="absolute bottom-[110%] left-0 z-50 rounded-xl border border-[#CDEBD6] bg-white shadow-md p-1 w-40"
                   >
                     <button
-                      className="justify-start w-full gap-2 btn btn-ghost btn-sm"
+                      className="gap-2 justify-start w-full btn btn-ghost btn-sm"
                       onClick={() => imageInputRef.current?.click()}
                       disabled={!canWrite || sending}
                     >
@@ -560,7 +560,7 @@ export default function ChatWindow({ conversationId, onBack }) {
                       Imagen
                     </button>
                     <button
-                      className="justify-start w-full gap-2 btn btn-ghost btn-sm"
+                      className="gap-2 justify-start w-full btn btn-ghost btn-sm"
                       onClick={() => audioInputRef.current?.click()}
                       disabled={!canWrite || sending}
                     >
@@ -624,7 +624,7 @@ export default function ChatWindow({ conversationId, onBack }) {
               Cerrar
             </button>
           </div>
-          <div className="h-full p-3 overflow-auto">
+          <div className="overflow-auto p-3 h-full">
             <ClientProfile contactId={contactId} phone={phone} conversationId={conversationId} />
           </div>
         </div>
@@ -637,10 +637,10 @@ export default function ChatWindow({ conversationId, onBack }) {
           onClick={() => setShowTags(false)}
         >
           <div
-            className="w-full max-w-md shadow-xl rounded-xl bg-base-100"
+            className="w-full max-w-md rounded-xl shadow-xl bg-base-100"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between p-3 border-b">
+            <div className="flex justify-between items-center p-3 border-b">
               <h3 className="font-semibold">Etiquetas</h3>
               <button className="btn btn-ghost btn-sm" onClick={() => setShowTags(false)}>
                 Cerrar
