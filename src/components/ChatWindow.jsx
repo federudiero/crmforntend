@@ -93,6 +93,9 @@ export default function ChatWindow({ conversationId, onBack }) {
   const audioInputRef = useRef(null);
   const attachBtnRef = useRef(null);
 
+  // flags para control de scroll
+  const didInitialAutoScroll = useRef(false);
+
   // ---------- limpieza inmediata al cambiar de chat ----------
   useEffect(() => {
     setMsgs([]);
@@ -102,6 +105,7 @@ export default function ChatWindow({ conversationId, onBack }) {
     setText("");
     setTab("chat");
     setShowAttachMenu(false);
+    didInitialAutoScroll.current = false; // resetea lógica de scroll
     requestAnimationFrame(() => viewportRef.current?.scrollTo({ top: 0 }));
   }, [conversationId]);
 
@@ -164,14 +168,39 @@ export default function ChatWindow({ conversationId, onBack }) {
 
   const canRead = useMemo(() => {
     const assignedToUid = convMeta?.assignedToUid || null;
+    const assignedEmail =
+      convMeta?.assignedToEmail || convMeta?.assignedEmail || null;
+    const assignedList = Array.isArray(convMeta?.assignedTo)
+      ? convMeta.assignedTo
+      : [];
+
     if (isAdmin) return true;
-    if (!assignedToUid) return false; // no montamos listeners si no hay dueño
-    return assignedToUid === user?.uid;
-  }, [convMeta?.assignedToUid, user?.uid, isAdmin]);
+
+    const meUid = user?.uid || "";
+    const meEmail = (user?.email || "").toLowerCase();
+
+    // si no hay ningún dato de asignación, no montamos listeners
+    if (!assignedToUid && !assignedEmail && assignedList.length === 0) return false;
+
+    // match por uid o email (string) o dentro del array assignedTo
+    const emailMatches =
+      typeof assignedEmail === "string" &&
+      assignedEmail.toLowerCase() === meEmail;
+
+    const listMatches = assignedList.some((x) => {
+      const s = String(x || "");
+      return s === meUid || s.toLowerCase() === meEmail;
+    });
+
+    return (
+      (assignedToUid && assignedToUid === meUid) ||
+      emailMatches ||
+      listMatches
+    );
+  }, [convMeta?.assignedToUid, convMeta?.assignedToEmail, convMeta?.assignedEmail, convMeta?.assignedTo, user?.uid, user?.email, isAdmin]);
 
   const canWrite = useMemo(() => {
     if (!canRead) return false;
-    // si tenés reglas extra, ponelas acá
     return true;
   }, [canRead]);
 
@@ -184,22 +213,51 @@ export default function ChatWindow({ conversationId, onBack }) {
       return;
     }
 
-    const qRef = query(
-      collection(db, "conversations", String(conversationId), "messages"),
-      orderBy("timestamp", "asc")
-    );
-    const unsub = onSnapshot(
-      qRef,
-      (snap) => {
-        const arr = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        setMsgs(arr);
-      },
-      (err) => console.error("onSnapshot(messages) error:", err)
-    );
-    return () => unsub();
+    let unsub = null;
+    let triedAlt = false; // evita bucle
+    let firstEmission = true;
+
+    const mount = (subcol = "messages") => {
+      if (typeof unsub === "function") {
+        unsub();
+        unsub = null;
+      }
+      const qRef = query(
+        collection(db, "conversations", String(conversationId), subcol),
+        orderBy("timestamp", "asc")
+      );
+      unsub = onSnapshot(
+        qRef,
+        (snap) => {
+          const arr = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+          setMsgs(arr);
+
+          // Si es la primera emisión y está vacío, probamos fallback a "msgs"
+          if (firstEmission && arr.length === 0 && !triedAlt && subcol === "messages") {
+            triedAlt = true;
+            mount("msgs");
+          }
+          firstEmission = false;
+        },
+        (err) => {
+          console.error(`onSnapshot(${subcol}) error:`, err);
+          // ante error probamos fallback una única vez
+          if (!triedAlt && subcol === "messages") {
+            triedAlt = true;
+            mount("msgs");
+          }
+        }
+      );
+    };
+
+    mount("messages");
+
+    return () => {
+      if (typeof unsub === "function") unsub();
+    };
   }, [conversationId, canRead]);
 
-  // ---------- auto-scroll al fondo cuando llegan mensajes / cambio de tab ----------
+  // ---------- auto-scroll controlado (evita “hueco”) ----------
   const scrollToBottom = (behavior = "auto") => {
     const el = viewportRef.current;
     if (!el) return;
@@ -207,11 +265,26 @@ export default function ChatWindow({ conversationId, onBack }) {
   };
 
   useEffect(() => {
-    if (tab === "chat") {
-      // smooth cuando ya había mensajes (no inicial vacío)
-      scrollToBottom(msgs.length > 0 ? "smooth" : "auto");
+    if (tab !== "chat") return;
+    const el = viewportRef.current;
+    if (!el) return;
+
+    // si no hay mensajes, no hacemos nada
+    if (msgs.length === 0) return;
+
+    const nearBottom =
+      el.scrollTop + el.clientHeight >= el.scrollHeight - 120;
+
+    // primer auto-scroll solo si desborda (evita dejar vacío arriba)
+    if (!didInitialAutoScroll.current) {
+      didInitialAutoScroll.current = true;
+      const overflows = el.scrollHeight > el.clientHeight + 8;
+      if (overflows) scrollToBottom("auto");
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
+    // siguientes: sólo si el usuario estaba cerca del fondo
+    if (nearBottom) scrollToBottom("smooth");
   }, [msgs, tab]);
 
   // ---------- UI helpers ----------
@@ -277,6 +350,8 @@ export default function ChatWindow({ conversationId, onBack }) {
             err?.error?.code ?? err?.code ?? (typeof err === "string" ? err : "");
           alert(`No se pudo enviar.\nCódigo: ${code || "desconocido"}`);
         }
+        // al enviar, scrolleo al fondo
+        scrollToBottom("smooth");
       })
       .catch((e) => {
         alert(e?.message || "No se pudo enviar");
@@ -297,13 +372,12 @@ export default function ChatWindow({ conversationId, onBack }) {
         conversationId,
         ...payload,
       });
+      scrollToBottom("smooth");
     } catch (err) {
       alert(err?.message || `No se pudo enviar el ${kind}`);
     } finally {
       setSending(false);
       setShowAttachMenu(false);
-      // scroll al enviar adjunto
-      scrollToBottom("smooth");
     }
   };
 
@@ -345,7 +419,6 @@ export default function ChatWindow({ conversationId, onBack }) {
   // ---------- render ----------
 
   if (!canRead) {
-    // Place-holder si el wrapper (home) montó el componente sin permiso
     return (
       <div className="flex justify-center items-center h-full text-sm text-gray-600">
         No tenés acceso a este chat. Asignate desde la lista.
@@ -358,7 +431,8 @@ export default function ChatWindow({ conversationId, onBack }) {
   const contactId = String(conversationId || phone || "");
 
   return (
-    <div className="flex h-full flex-col text-black bg-[#F6FBF7]">
+    // 👇 cambios: ancho completo + ocultar overflow-x
+    <div className="flex h-full min-h-0 w-full overflow-x-hidden flex-col text-black bg-[#F6FBF7]">
       {/* Header */}
       <header className="sticky top-0 z-40 border-b bg-[#E8F5E9]/90 border-[#CDEBD6] backdrop-blur">
         <div className="px-3 pt-2 pb-2 md:px-4">
@@ -459,124 +533,133 @@ export default function ChatWindow({ conversationId, onBack }) {
         </div>
       </header>
 
-      {/* Tabs */}
-      <div className="px-3 pt-2 md:px-4">
-        <div className="flex overflow-hidden rounded border bg-white/70 border-[#CDEBD6]">
-          <button
-            className={
-              "px-3 py-1 text-sm transition-colors " +
-              (tab === "chat"
-                ? "bg-[#2E7D32] text-white"
-                : "bg-transparent hover:bg-[#E8F5E9]")
-            }
-            onClick={() => setTab("chat")}
-          >
-            Chat
-          </button>
-          <button
-            className={
-              "px-3 py-1 text-sm transition-colors " +
-              (tab === "destacados"
-                ? "bg-[#2E7D32] text-white"
-                : "bg-transparent hover:bg-[#E8F5E9]")
-            }
-            onClick={() => setTab("destacados")}
-          >
-            Destacados
-          </button>
+      {/* Wrapper para tabs + contenido con altura correcta */}
+      <section className="flex flex-col flex-1 min-h-0">
+        {/* Tabs */}
+        <div className="px-3 pt-2 md:px-4">
+          <div className="flex overflow-hidden rounded border bg-white/70 border-[#CDEBD6]">
+            <button
+              className={
+                "px-3 py-1 text-sm transition-colors " +
+                (tab === "chat"
+                  ? "bg-[#2E7D32] text-white"
+                  : "bg-transparent hover:bg-[#E8F5E9]")
+              }
+              onClick={() => setTab("chat")}
+            >
+              Chat
+            </button>
+            <button
+              className={
+                "px-3 py-1 text-sm transition-colors " +
+                (tab === "destacados"
+                  ? "bg-[#2E7D32] text-white"
+                  : "bg-transparent hover:bg-[#E8F5E9]")
+              }
+              onClick={() => setTab("destacados")}
+            >
+              Destacados
+            </button>
+          </div>
         </div>
-      </div>
 
-      {/* Contenido */}
-      {tab === "chat" ? (
-        <main ref={viewportRef} className="overflow-y-auto flex-1 px-3 py-3 md:px-4 md:py-4">
-          {msgs.length === 0 && (
-            <div className="mx-auto rounded-xl border border-[#CDEBD6] bg-[#EAF7EE] p-4 text-center text-sm">
-              Sin mensajes todavía.
-            </div>
-          )}
+        {/* Contenido */}
+        {tab === "chat" ? (
+          // 👇 cambios: ocultar overflow-x en el viewport de mensajes
+          <main
+            ref={viewportRef}
+            className="overflow-y-auto overflow-x-hidden flex-1 px-3 py-3 md:px-4 md:py-4"
+          >
+            {msgs.length === 0 && (
+              <div className="mx-auto rounded-xl border border-[#CDEBD6] bg-[#EAF7EE] p-4 text-center text-sm">
+                Sin mensajes todavía.
+              </div>
+            )}
 
-          <div className="flex flex-col gap-2 mx-auto w-full max-w-none">
-            {msgs.map((m) => {
-              const isOut = isOutgoingMessage(m, user);
-              const type = m?.type || (m?.image ? "image" : m?.audio ? "audio" : "text");
-              const mediaUrl =
-                m?.mediaUrl ||
-                m?.image?.link ||
-                m?.image?.url ||
-                m?.audio?.link ||
-                m?.audio?.url ||
-                null;
+            <div className="flex flex-col gap-2 mx-auto w-full max-w-none">
+              {msgs.map((m) => {
+                const isOut = isOutgoingMessage(m, user);
+                const type =
+                  m?.type || (m?.image ? "image" : m?.audio ? "audio" : "text");
+                const mediaUrl =
+                  m?.mediaUrl ||
+                  m?.image?.link ||
+                  m?.image?.url ||
+                  m?.audio?.link ||
+                  m?.audio?.url ||
+                  null;
 
-              const wrapperClass = `flex ${isOut ? "justify-end" : "justify-start"}`;
-              const bubbleClass = isOut
-                ? "bg-gradient-to-r from-[#2E7D32] to-[#388E3C] text-white rounded-2xl rounded-br-md shadow-sm"
-                : "bg-white border border-[#E0EDE4] text-gray-800 rounded-2xl rounded-bl-md shadow-sm";
+                // 👇 cambios: fila ocupa el 100% del ancho del panel
+                const wrapperClass = `flex w-full ${isOut ? "justify-end" : "justify-start"}`;
+                const bubbleClass = isOut
+                  ? "bg-gradient-to-r from-[#2E7D32] to-[#388E3C] text-white rounded-2xl rounded-br-md shadow-sm"
+                  : "bg-white border border-[#E0EDE4] text-gray-800 rounded-2xl rounded-bl-md shadow-sm";
 
-              const visibleText =
-                typeof m?.text === "string"
-                  ? m.text
-                  : m?.template
-                  ? `[template] ${m.template}`
-                  : typeof m?.text === "object"
-                  ? JSON.stringify(m?.text || "")
-                  : m?.caption || "";
+                const visibleText =
+                  typeof m?.text === "string"
+                    ? m.text
+                    : m?.template
+                    ? `[template] ${m.template}`
+                    : typeof m?.text === "object"
+                    ? JSON.stringify(m?.text || "")
+                    : m?.caption || "";
 
-              return (
-                <div key={m.id} className={wrapperClass}>
-                  <div className="max-w-[85%] px-4 py-2">
-                    {/* Píldora Yo/Cliente */}
-                    <div
-                      className={`mb-1 text-[10px] font-medium ${
-                        isOut ? "text-[#2E7D32]" : "text-gray-500"
-                      }`}
-                    >
-                      <span
-                        className={`px-2 py-[2px] rounded-full border ${
-                          isOut ? "border-[#2E7D32]/40 bg-[#E6F2E8]" : "border-gray-300 bg-gray-50"
+                return (
+                  <div key={m.id} className={wrapperClass}>
+                    <div className="max-w-[85%] px-4 py-2">
+                      {/* Píldora Yo/Cliente */}
+                      <div
+                        className={`mb-1 text-[10px] font-medium ${
+                          isOut ? "text-[#2E7D32]" : "text-gray-500"
                         }`}
                       >
-                        {isOut ? "Yo" : "Cliente"}
-                      </span>
-                    </div>
+                        <span
+                          className={`px-2 py-[2px] rounded-full border ${
+                            isOut ? "border-[#2E7D32]/40 bg-[#E6F2E8]" : "border-gray-300 bg-gray-50"
+                          }`}
+                        >
+                          {isOut ? "Yo" : "Cliente"}
+                        </span>
+                      </div>
 
-                    <div className={`px-4 py-3 ${bubbleClass}`}>
-                      {type === "image" && mediaUrl ? (
-                        <img src={mediaUrl} alt="" className="max-w-full rounded-lg" loading="lazy" />
-                      ) : type === "audio" && mediaUrl ? (
-                        <audio controls className="max-w-full">
-                          <source src={mediaUrl} />
-                        </audio>
-                      ) : (
-                        <div className="leading-relaxed whitespace-pre-wrap break-words">
-                          {visibleText}
-                        </div>
-                      )}
-
-                      <div className="flex gap-2 justify-between items-center mt-2">
-                        <div className={`text-xs ${isOut ? "text-white/80" : "text-gray-500"}`}>
-                          {formatTs(m.timestamp)}
-                        </div>
-                        {canWrite && (
-                          <StarButton
-                            chatId={conversationId}
-                            messageId={m.id}
-                            texto={visibleText}
-                          />
+                      <div className={`px-4 py-3 ${bubbleClass}`}>
+                        {type === "image" && mediaUrl ? (
+                          <img src={mediaUrl} alt="" className="max-w-full rounded-lg" loading="lazy" />
+                        ) : type === "audio" && mediaUrl ? (
+                          <audio controls className="max-w-full">
+                            <source src={mediaUrl} />
+                          </audio>
+                        ) : (
+                          <div className="leading-relaxed whitespace-pre-wrap break-words">
+                            {visibleText}
+                          </div>
                         )}
+
+                        <div className="flex gap-2 justify-between items-center mt-2">
+                          <div className={`text-xs ${isOut ? "text-white/80" : "text-gray-500"}`}>
+                            {formatTs(m.timestamp)}
+                          </div>
+                          {canWrite && (
+                            <StarButton
+                              chatId={conversationId}
+                              messageId={m.id}
+                              texto={visibleText}
+                            />
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        </main>
-      ) : (
-        <main className="overflow-y-auto flex-1 px-3 py-3 md:px-4 md:py-4">
-          <ChatDestacadosPanel chatId={conversationId} />
-        </main>
-      )}
+                );
+              })}
+            </div>
+          </main>
+        ) : (
+          <main className="overflow-y-auto flex-1 px-3 py-3 md:px-4 md:py-4">
+            <ChatDestacadosPanel chatId={conversationId} />
+          </main>
+        )}
+      </section>
 
       {/* Input */}
       <div className="border-t border-[#CDEBD6] bg-[#F6FBF7]">

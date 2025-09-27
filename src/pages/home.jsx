@@ -75,20 +75,15 @@ export default function Home() {
   // Verificar si el usuario puede acceder a la conversación
   const canAccess = useMemo(() => {
     if (!user || !currentConvMeta) return false;
-    
-    // Admin puede acceder a todo
-    if (isAdmin) return true;
-    
-    // Usuario asignado puede acceder
-    if (currentConvMeta.assignedToUid === user.uid) return true;
-    
+    if (isAdmin) return true; // Admin puede acceder a todo
+    if (currentConvMeta.assignedToUid === user.uid) return true; // Usuario asignado puede acceder
     return false;
   }, [user, currentConvMeta, isAdmin]);
 
   // Función para asignarse la conversación
   const handleAssignToMe = async () => {
     if (!decoded || !user) return;
-    
+
     setAssignLoading(true);
     try {
       await updateDoc(doc(db, "conversations", decoded), {
@@ -133,8 +128,7 @@ export default function Home() {
 
   const openConv = (id) => {
     navigate(`/home/${encodeURIComponent(id)}`);
-    // En móviles, al abrir una conv saltamos al chat
-    setMobileView("chat");
+    setMobileView("chat"); // En móviles, al abrir una conv saltamos al chat
   };
 
   const currentConvId = decoded;
@@ -222,12 +216,12 @@ export default function Home() {
                 />
               </aside>
 
-              <main className="flex col-span-8 min-h-0">
+              {/* 👇 cambios: ocupar todo el ancho del slot y ocultar overflow-x */}
+              <main className="flex overflow-x-hidden col-span-8 w-full h-full min-h-0">
                 {currentConvId ? (
-                  // Verificar permisos antes de montar ChatWindow
                   canAccess ? (
                     <ChatWindow
-                      key={currentConvId}         
+                      key={currentConvId}
                       conversationId={currentConvId}
                       convMeta={currentConvMeta}
                     />
@@ -254,12 +248,12 @@ export default function Home() {
                 </div>
               )}
               {mobileView === "chat" && (
-                <div className="h-full min-h-0">
+                // 👇 cambios: ancho completo + ocultar overflow-x
+                <div className="overflow-x-hidden w-full h-full min-h-0">
                   {currentConvId ? (
-                    // Verificar permisos antes de montar ChatWindow en mobile
                     canAccess ? (
                       <ChatWindow
-                        key={currentConvId}     
+                        key={currentConvId}
                         conversationId={currentConvId}
                         convMeta={currentConvMeta}
                         onBack={() => setMobileView("list")}
