@@ -35,7 +35,64 @@ import {
   Send as SendIcon,
   Tags as TagsIcon,
   UserRound,
+  Smile,
 } from "lucide-react";
+
+// =========================
+// PREVIEW FIX — mediaUrl resolver
+// Prioridad: media.url → media.link → mediaUrl → image.link/url → audio.link/url
+// =========================
+function resolveMediaUrl(m) {
+  // Verificar que el mensaje existe
+  if (!m || typeof m !== 'object') {
+    console.warn('⚠️ resolveMediaUrl: mensaje inválido', m);
+    return null;
+  }
+
+  const url = (
+    m?.media?.url ||
+    m?.media?.link || // <-- clave para salientes (sendMessage guarda media.link)
+    m?.mediaUrl ||
+    m?.image?.link ||
+    m?.image?.url ||
+    m?.audio?.link ||
+    m?.audio?.url ||
+    null
+  );
+  
+  // DEBUG: Log para diagnosticar URLs de imágenes
+  if (m?.type === 'image' || m?.media?.kind === 'image' || m?.mediaKind === 'image') {
+    console.log('🖼️ DEBUG Image URL Resolution:', {
+      messageId: m?.id,
+      type: m?.type,
+      mediaKind: m?.media?.kind || m?.mediaKind,
+      resolvedUrl: url,
+      mediaUrl: m?.mediaUrl,
+      mediaObject: m?.media,
+      imageObject: m?.image,
+      hasMedia: m?.hasMedia,
+      mediaError: m?.mediaError,
+      // Mostrar todas las propiedades disponibles para debug
+      allProps: Object.keys(m || {}).filter(key => 
+        key.includes('media') || key.includes('image') || key.includes('url')
+      ),
+      // Mostrar el mensaje completo para debug
+      fullMessage: m
+    });
+  }
+  
+  // Si no encontramos URL pero hay error específico
+  if (!url && m?.mediaError === "URL_NOT_AVAILABLE") {
+    console.warn("🔍 DEBUG: Media URL not available from WhatsApp - ID de media probablemente expirado");
+  }
+  
+  // Si es media expirada, mostrar información adicional
+  if (!url && m?.mediaError === "MEDIA_EXPIRED") {
+    console.warn("⏰ DEBUG: Media expirada permanentemente - mostrar placeholder");
+  }
+  
+  return url;
+}
 
 // ---------- helpers ----------
 function formatTs(ts) {
@@ -86,12 +143,16 @@ export default function ChatWindow({ conversationId, onBack }) {
   const [tab, setTab] = useState("chat");
   const [showAttachMenu, setShowAttachMenu] = useState(false);
 
+  // EMOJI PICKER
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+
   // ---- refs ----
   const viewportRef = useRef(null);
   const textareaRef = useRef(null);
   const imageInputRef = useRef(null);
   const audioInputRef = useRef(null);
   const attachBtnRef = useRef(null);
+  const emojiPickerRef = useRef(null);
 
   // flags para control de scroll
   const didInitialAutoScroll = useRef(false);
@@ -105,7 +166,8 @@ export default function ChatWindow({ conversationId, onBack }) {
     setText("");
     setTab("chat");
     setShowAttachMenu(false);
-    didInitialAutoScroll.current = false; // resetea lógica de scroll
+    setShowEmojiPicker(false);
+    didInitialAutoScroll.current = false;
     requestAnimationFrame(() => viewportRef.current?.scrollTo({ top: 0 }));
   }, [conversationId]);
 
@@ -179,10 +241,8 @@ export default function ChatWindow({ conversationId, onBack }) {
     const meUid = user?.uid || "";
     const meEmail = (user?.email || "").toLowerCase();
 
-    // si no hay ningún dato de asignación, no montamos listeners
     if (!assignedToUid && !assignedEmail && assignedList.length === 0) return false;
 
-    // match por uid o email (string) o dentro del array assignedTo
     const emailMatches =
       typeof assignedEmail === "string" &&
       assignedEmail.toLowerCase() === meEmail;
@@ -207,14 +267,13 @@ export default function ChatWindow({ conversationId, onBack }) {
   // ---------- mensajes (solo si canRead) ----------
   useEffect(() => {
     if (!conversationId) return;
-
     if (!canRead) {
       setMsgs([]);
       return;
     }
 
     let unsub = null;
-    let triedAlt = false; // evita bucle
+    let triedAlt = false;
     let firstEmission = true;
 
     const mount = (subcol = "messages") => {
@@ -232,7 +291,6 @@ export default function ChatWindow({ conversationId, onBack }) {
           const arr = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
           setMsgs(arr);
 
-          // Si es la primera emisión y está vacío, probamos fallback a "msgs"
           if (firstEmission && arr.length === 0 && !triedAlt && subcol === "messages") {
             triedAlt = true;
             mount("msgs");
@@ -241,7 +299,6 @@ export default function ChatWindow({ conversationId, onBack }) {
         },
         (err) => {
           console.error(`onSnapshot(${subcol}) error:`, err);
-          // ante error probamos fallback una única vez
           if (!triedAlt && subcol === "messages") {
             triedAlt = true;
             mount("msgs");
@@ -257,7 +314,7 @@ export default function ChatWindow({ conversationId, onBack }) {
     };
   }, [conversationId, canRead]);
 
-  // ---------- auto-scroll controlado (evita “hueco”) ----------
+  // ---------- auto-scroll ----------
   const scrollToBottom = (behavior = "auto") => {
     const el = viewportRef.current;
     if (!el) return;
@@ -268,14 +325,11 @@ export default function ChatWindow({ conversationId, onBack }) {
     if (tab !== "chat") return;
     const el = viewportRef.current;
     if (!el) return;
-
-    // si no hay mensajes, no hacemos nada
     if (msgs.length === 0) return;
 
     const nearBottom =
       el.scrollTop + el.clientHeight >= el.scrollHeight - 120;
 
-    // primer auto-scroll solo si desborda (evita dejar vacío arriba)
     if (!didInitialAutoScroll.current) {
       didInitialAutoScroll.current = true;
       const overflows = el.scrollHeight > el.clientHeight + 8;
@@ -283,7 +337,6 @@ export default function ChatWindow({ conversationId, onBack }) {
       return;
     }
 
-    // siguientes: sólo si el usuario estaba cerca del fondo
     if (nearBottom) scrollToBottom("smooth");
   }, [msgs, tab]);
 
@@ -330,6 +383,27 @@ export default function ChatWindow({ conversationId, onBack }) {
     requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
+  // =========================
+  // EMOJI PICKER — insertar en caret
+  // =========================
+  const insertEmojiAtCursor = (emoji) => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const start = textarea.selectionStart ?? text.length;
+    const end = textarea.selectionEnd ?? text.length;
+    const newText = text.slice(0, start) + emoji.native + text.slice(end);
+    setText(newText);
+    requestAnimationFrame(() => {
+      const p = start + emoji.native.length;
+      textarea.setSelectionRange(p, p);
+      textarea.focus();
+    });
+  };
+  const handleEmojiSelect = (emoji) => {
+    insertEmojiAtCursor(emoji);
+    setShowEmojiPicker(false);
+  };
+
   // envío texto
   const doSend = () => {
     const body = (text || "").trim();
@@ -350,7 +424,6 @@ export default function ChatWindow({ conversationId, onBack }) {
             err?.error?.code ?? err?.code ?? (typeof err === "string" ? err : "");
           alert(`No se pudo enviar.\nCódigo: ${code || "desconocido"}`);
         }
-        // al enviar, scrolleo al fondo
         scrollToBottom("smooth");
       })
       .catch((e) => {
@@ -416,6 +489,22 @@ export default function ChatWindow({ conversationId, onBack }) {
     };
   }, [showAttachMenu]);
 
+  // cerrar emoji picker en click afuera / Esc
+  useEffect(() => {
+    if (!showEmojiPicker) return;
+    const onDocClick = (e) => {
+      if (!emojiPickerRef.current) return;
+      if (!emojiPickerRef.current.contains(e.target)) setShowEmojiPicker(false);
+    };
+    const onEsc = (e) => e.key === "Escape" && setShowEmojiPicker(false);
+    document.addEventListener("click", onDocClick);
+    document.addEventListener("keydown", onEsc);
+    return () => {
+      document.removeEventListener("click", onDocClick);
+      document.removeEventListener("keydown", onEsc);
+    };
+  }, [showEmojiPicker]);
+
   // ---------- render ----------
 
   if (!canRead) {
@@ -431,7 +520,6 @@ export default function ChatWindow({ conversationId, onBack }) {
   const contactId = String(conversationId || phone || "");
 
   return (
-    // 👇 cambios: ancho completo + ocultar overflow-x
     <div className="flex h-full min-h-0 w-full overflow-x-hidden flex-col text-black bg-[#F6FBF7]">
       {/* Header */}
       <header className="sticky top-0 z-40 border-b bg-[#E8F5E9]/90 border-[#CDEBD6] backdrop-blur">
@@ -465,7 +553,7 @@ export default function ChatWindow({ conversationId, onBack }) {
             </div>
           </div>
 
-          {/* Fila 2: Toolbar con íconos */}
+          {/* Fila 2: Toolbar */}
           <div className="overflow-x-auto -mx-1 mt-2 no-scrollbar">
             <div className="flex gap-2 items-center px-1 snap-x snap-mandatory">
               {/* Plantillas (icon-only) */}
@@ -533,7 +621,7 @@ export default function ChatWindow({ conversationId, onBack }) {
         </div>
       </header>
 
-      {/* Wrapper para tabs + contenido con altura correcta */}
+      {/* Tabs + contenido */}
       <section className="flex flex-col flex-1 min-h-0">
         {/* Tabs */}
         <div className="px-3 pt-2 md:px-4">
@@ -565,7 +653,6 @@ export default function ChatWindow({ conversationId, onBack }) {
 
         {/* Contenido */}
         {tab === "chat" ? (
-          // 👇 cambios: ocultar overflow-x en el viewport de mensajes
           <main
             ref={viewportRef}
             className="overflow-y-auto overflow-x-hidden flex-1 px-3 py-3 md:px-4 md:py-4"
@@ -579,17 +666,15 @@ export default function ChatWindow({ conversationId, onBack }) {
             <div className="flex flex-col gap-2 mx-auto w-full max-w-none">
               {msgs.map((m) => {
                 const isOut = isOutgoingMessage(m, user);
-                const type =
-                  m?.type || (m?.image ? "image" : m?.audio ? "audio" : "text");
-                const mediaUrl =
-                  m?.mediaUrl ||
-                  m?.image?.link ||
-                  m?.image?.url ||
-                  m?.audio?.link ||
-                  m?.audio?.url ||
-                  null;
 
-                // 👇 cambios: fila ocupa el 100% del ancho del panel
+                // PREVIEW FIX — tipo + mediaUrl
+                const mediaUrl = resolveMediaUrl(m);
+                const type =
+                  m?.media?.kind || // <-- primero el "kind" del backend (image/audio/sticker)
+                  m?.mediaKind ||   // <-- también revisar mediaKind directo
+                  m?.type ||
+                  (m?.image ? "image" : m?.audio ? "audio" : "text");
+
                 const wrapperClass = `flex w-full ${isOut ? "justify-end" : "justify-start"}`;
                 const bubbleClass = isOut
                   ? "bg-gradient-to-r from-[#2E7D32] to-[#388E3C] text-white rounded-2xl rounded-br-md shadow-sm"
@@ -623,8 +708,65 @@ export default function ChatWindow({ conversationId, onBack }) {
                       </div>
 
                       <div className={`px-4 py-3 ${bubbleClass}`}>
+                        {/* PREVIEW FIX — Render */}
                         {type === "image" && mediaUrl ? (
-                          <img src={mediaUrl} alt="" className="max-w-full rounded-lg" loading="lazy" />
+                          <img
+                            src={mediaUrl}
+                            alt="Imagen"
+                            className="max-w-full rounded-lg"
+                            loading="lazy"
+                            onError={(e) => {
+                              e.currentTarget.style.display = "none";
+                              const fallback = e.currentTarget.nextSibling;
+                              if (fallback) fallback.style.display = "block";
+                            }}
+                          />
+                        ) : type === "image" && (m.mediaError === "URL_NOT_AVAILABLE" || m.mediaError === "MEDIA_EXPIRED" || m.mediaError === "DOWNLOAD_FAILED_EXPIRED") ? (
+                          // Placeholder para imágenes con media expirada o error de descarga
+                          <div className={`flex flex-col items-center gap-2 p-4 rounded-lg border-2 border-dashed ${
+                            isOut ? "border-white/30 bg-white/10" : "border-gray-300 bg-gray-50"
+                          }`}>
+                            <ImageIcon className={`w-8 h-8 ${isOut ? "text-white/60" : "text-gray-400"}`} />
+                            <div className={`text-sm text-center ${isOut ? "text-white/80" : "text-gray-600"}`}>
+                              <div>Imagen no disponible</div>
+                              <div className="text-xs mt-1">
+                                {m.mediaError === "MEDIA_EXPIRED" 
+                                  ? "Media expirada (>48h)" 
+                                  : m.mediaError === "DOWNLOAD_FAILED_EXPIRED"
+                                  ? "Descarga falló - Media expirada"
+                                  : "ID de media expirado"}
+                              </div>
+                            </div>
+                          </div>
+                        ) : type === "sticker" ? (
+                          <div className="flex flex-col gap-2 items-center">
+                            {mediaUrl ? (
+                              <img
+                                src={mediaUrl}
+                                alt="Sticker"
+                                className="max-w-[160px] max-h-[160px] rounded-lg"
+                                loading="lazy"
+                                onError={(e) => {
+                                  e.currentTarget.style.display = "none";
+                                  const fallback = e.currentTarget.nextSibling;
+                                  if (fallback) fallback.style.display = "block";
+                                }}
+                              />
+                            ) : null}
+                            <span
+                              className={`text-xs px-2 py-1 rounded-full ${
+                                isOut ? "text-white bg-white/20" : "text-gray-600 bg-gray-100"
+                              }`}
+                            >
+                              Sticker
+                            </span>
+                            <div
+                              style={{ display: "none" }}
+                              className={`text-sm ${isOut ? "text-white/80" : "text-gray-600"}`}
+                            >
+                              Sticker no disponible
+                            </div>
+                          </div>
                         ) : type === "audio" && mediaUrl ? (
                           <audio controls className="max-w-full">
                             <source src={mediaUrl} />
@@ -672,7 +814,7 @@ export default function ChatWindow({ conversationId, onBack }) {
               <input ref={imageInputRef} type="file" accept="image/*" hidden onChange={onPickImage} />
               <input ref={audioInputRef} type="file" accept="audio/*" hidden onChange={onPickAudio} />
 
-              {/* Botón de adjuntos */}
+              {/* Adjuntos */}
               <div className="relative">
                 <button
                   ref={attachBtnRef}
@@ -718,7 +860,7 @@ export default function ChatWindow({ conversationId, onBack }) {
               <textarea
                 ref={textareaRef}
                 rows={1}
-                className="textarea textarea-bordered w-full min-h[36px] max-h-40 resize-none leading-tight text-black placeholder:text-black/60 border-[#CDEBD6] focus:border-[#2E7D32]"
+                className="textarea textarea-bordered w-full min-h-[36px] max-h-40 resize-none leading-tight text-black placeholder:text-black/60 border-[#CDEBD6] focus:border-[#2E7D32]"
                 placeholder={
                   canWrite
                     ? "Escribí un mensaje… (Enter para enviar, Shift+Enter salto)"
@@ -733,6 +875,44 @@ export default function ChatWindow({ conversationId, onBack }) {
                 autoCapitalize="sentences"
                 spellCheck={true}
               />
+
+              {/* EMOJI */}
+              <div className="relative">
+                <button
+                  className="btn btn-square btn-sm border border-[#CDEBD6] bg-white text-black hover:bg-[#F1FAF3]"
+                  disabled={!canWrite}
+                  onClick={() => setShowEmojiPicker((v) => !v)}
+                  title="Insertar emoji"
+                >
+                  <Smile className="w-4 h-4" />
+                </button>
+
+                {showEmojiPicker && (
+                  <div
+                    ref={emojiPickerRef}
+                    className="absolute bottom-[110%] right-0 z-50 rounded-xl border border-[#CDEBD6] bg-white shadow-lg p-3 w-64 max-h-48 overflow-y-auto"
+                  >
+                    <div className="grid grid-cols-8 gap-1">
+                      {[
+                        "😀","😃","😄","😁","😆","😅","😂","🤣","😊","😇","🙂","🙃","😉","😌","😍","🥰","😘","😗","😙","😚",
+                        "😋","😛","😝","😜","🤪","🤨","🧐","🤓","😎","🤩","🥳","😏","😒","😞","😔","😟","😕","🙁","☹️","😣",
+                        "😖","😫","😩","🥺","😢","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🤗",
+                        "🤔","🤭","🤫","🤥","😶","😐","😑","😬","🙄","😯","😦","😧","😮","😲","🥱","😴","🤤","😪","😵","🤐",
+                        "🥴","🤢","🤮","🤧","😷","🤒","🤕","🤑","🤠","😈","👿","👹","👺","🤡","💩","👻","💀","☠️","👽","👾",
+                        "🤖","🎃","😺","😸","😹","😻","😼","😽","🙀","😿","😾"
+                      ].map((emoji) => (
+                        <button
+                          key={emoji}
+                          className="p-1 text-lg rounded hover:bg-gray-100"
+                          onClick={() => handleEmojiSelect({ native: emoji })}
+                        >
+                          {emoji}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
 
               {/* Enviar */}
               <button
