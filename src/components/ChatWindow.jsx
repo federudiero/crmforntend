@@ -36,62 +36,48 @@ import {
   Tags as TagsIcon,
   UserRound,
   Smile,
+  ExternalLink,
 } from "lucide-react";
 
 // =========================
 // PREVIEW FIX — mediaUrl resolver
-// Prioridad: media.url → media.link → mediaUrl → image.link/url → audio.link/url
+// Prioridad: media.url → media.link → (top-level) url/fileUrl → mediaUrl → image.link/url → audio.link/url
 // =========================
 function resolveMediaUrl(m) {
-  // Verificar que el mensaje existe
-  if (!m || typeof m !== 'object') {
-    console.warn('⚠️ resolveMediaUrl: mensaje inválido', m);
-    return null;
-  }
+  if (!m || typeof m !== "object") return null;
 
-  const url = (
+  let url =
     m?.media?.url ||
-    m?.media?.link || // <-- clave para salientes (sendMessage guarda media.link)
+    m?.media?.link ||
+    m?.url || // salientes (top-level)
+    m?.fileUrl || // salientes (top-level alternativo)
     m?.mediaUrl ||
     m?.image?.link ||
     m?.image?.url ||
     m?.audio?.link ||
     m?.audio?.url ||
-    null
-  );
-  
-  // DEBUG: Log para diagnosticar URLs de imágenes
-  if (m?.type === 'image' || m?.media?.kind === 'image' || m?.mediaKind === 'image') {
-    console.log('🖼️ DEBUG Image URL Resolution:', {
-      messageId: m?.id,
-      type: m?.type,
-      mediaKind: m?.media?.kind || m?.mediaKind,
-      resolvedUrl: url,
-      mediaUrl: m?.mediaUrl,
-      mediaObject: m?.media,
-      imageObject: m?.image,
-      hasMedia: m?.hasMedia,
-      mediaError: m?.mediaError,
-      // Mostrar todas las propiedades disponibles para debug
-      allProps: Object.keys(m || {}).filter(key => 
-        key.includes('media') || key.includes('image') || key.includes('url')
-      ),
-      // Mostrar el mensaje completo para debug
-      fullMessage: m
-    });
+    null;
+
+  if (typeof url === "string") {
+    // Normalizar string (espacios/line breaks/comillas perdidas)
+    url = url.replace(/\s+/g, " ").trim();
+    if (
+      (url.startsWith('"') && url.endsWith('"')) ||
+      (url.startsWith("'") && url.endsWith("'"))
+    ) {
+      url = url.slice(1, -1);
+    }
   }
-  
-  // Si no encontramos URL pero hay error específico
-  if (!url && m?.mediaError === "URL_NOT_AVAILABLE") {
-    console.warn("🔍 DEBUG: Media URL not available from WhatsApp - ID de media probablemente expirado");
+
+  // FIX dominio bucket mal formateado detectado en logs anteriores
+  if (url && typeof url === "string" && url.includes("crmsistem-d3009.fir")) {
+    url = url.replace(
+      /crmsistem-d3009\.fir[^/]*/,
+      "crmsistem-d3009.firebasestorage.app"
+    );
   }
-  
-  // Si es media expirada, mostrar información adicional
-  if (!url && m?.mediaError === "MEDIA_EXPIRED") {
-    console.warn("⏰ DEBUG: Media expirada permanentemente - mostrar placeholder");
-  }
-  
-  return url;
+
+  return url || null;
 }
 
 // ---------- helpers ----------
@@ -100,7 +86,7 @@ function formatTs(ts) {
   return d ? d.toLocaleString() : "";
 }
 
-// Detecta si un mensaje es saliente (mío) de forma robusta
+// Detecta si un mensaje es saliente (mío)
 function isOutgoingMessage(m, user) {
   if (typeof m?.direction === "string") return m.direction === "out";
   if (typeof m?.from === "string") {
@@ -116,11 +102,33 @@ function isOutgoingMessage(m, user) {
   }
   if (typeof m?.author === "string") {
     const a = m.author.toLowerCase();
-    if (a === "me" || a === (user?.uid || "").toLowerCase() || a === (user?.email || "").toLowerCase()) {
+    if (
+      a === "me" ||
+      a === (user?.uid || "").toLowerCase() ||
+      a === (user?.email || "").toLowerCase()
+    ) {
       return true;
     }
   }
-  return false; // por defecto entrante
+  return false;
+}
+
+// Texto visible robusto (WhatsApp a veces lo guarda en text.body / message.text.body / raw.* / caption)
+function getVisibleText(m) {
+  if (!m) return "";
+  const candidates = [
+    typeof m?.text === "string" ? m.text : null,
+    m?.text?.body,
+    m?.message?.text?.body,
+    m?.message?.body,
+    m?.body,
+    m?.caption,
+    m?.raw?.text?.body,
+    m?.raw?.message?.text?.body,
+  ].filter(Boolean);
+  if (candidates.length > 0) return String(candidates[0]);
+  if (typeof m?.text === "object") return JSON.stringify(m.text || "");
+  return "";
 }
 
 export default function ChatWindow({ conversationId, onBack }) {
@@ -154,10 +162,9 @@ export default function ChatWindow({ conversationId, onBack }) {
   const attachBtnRef = useRef(null);
   const emojiPickerRef = useRef(null);
 
-  // flags para control de scroll
   const didInitialAutoScroll = useRef(false);
 
-  // ---------- limpieza inmediata al cambiar de chat ----------
+  // limpiar al cambiar chat
   useEffect(() => {
     setMsgs([]);
     setConvSlugs([]);
@@ -171,7 +178,7 @@ export default function ChatWindow({ conversationId, onBack }) {
     requestAnimationFrame(() => viewportRef.current?.scrollTo({ top: 0 }));
   }, [conversationId]);
 
-  // ---------- etiquetas catálogo ----------
+  // etiquetas
   useEffect(() => {
     (async () => {
       try {
@@ -192,7 +199,7 @@ export default function ChatWindow({ conversationId, onBack }) {
   const getLabel = (slug) =>
     labelBySlug.get(slug) || { name: slug, slug, color: "neutral" };
 
-  // ---------- meta conversación ----------
+  // meta conversación
   useEffect(() => {
     if (!conversationId) return;
     const unsub = onSnapshot(
@@ -207,7 +214,7 @@ export default function ChatWindow({ conversationId, onBack }) {
     return () => unsub();
   }, [conversationId]);
 
-  // ---------- contacto ----------
+  // contacto
   useEffect(() => {
     (async () => {
       try {
@@ -223,7 +230,7 @@ export default function ChatWindow({ conversationId, onBack }) {
     })();
   }, [conversationId]);
 
-  // ---------- permisos ----------
+  // permisos
   const isAdmin =
     !!user?.email &&
     ["federudiero@gmail.com", "fede_rudiero@gmail.com"].includes(user.email);
@@ -241,7 +248,8 @@ export default function ChatWindow({ conversationId, onBack }) {
     const meUid = user?.uid || "";
     const meEmail = (user?.email || "").toLowerCase();
 
-    if (!assignedToUid && !assignedEmail && assignedList.length === 0) return false;
+    if (!assignedToUid && !assignedEmail && assignedList.length === 0)
+      return false;
 
     const emailMatches =
       typeof assignedEmail === "string" &&
@@ -257,64 +265,80 @@ export default function ChatWindow({ conversationId, onBack }) {
       emailMatches ||
       listMatches
     );
-  }, [convMeta?.assignedToUid, convMeta?.assignedToEmail, convMeta?.assignedEmail, convMeta?.assignedTo, user?.uid, user?.email, isAdmin]);
+  }, [
+    convMeta?.assignedToUid,
+    convMeta?.assignedToEmail,
+    convMeta?.assignedEmail,
+    convMeta?.assignedTo,
+    user?.uid,
+    user?.email,
+    isAdmin,
+  ]);
 
   const canWrite = useMemo(() => {
     if (!canRead) return false;
     return true;
   }, [canRead]);
 
-  // ---------- mensajes (solo si canRead) ----------
-  useEffect(() => {
-    if (!conversationId) return;
-    if (!canRead) {
-      setMsgs([]);
-      return;
-    }
+  // mensajes
+ // mensajes (escuchar ambas subcolecciones y mergear)
+useEffect(() => {
+  if (!conversationId || !canRead) {
+    setMsgs([]);
+    return;
+  }
 
-    let unsub = null;
-    let triedAlt = false;
-    let firstEmission = true;
+  const colA = collection(db, "conversations", String(conversationId), "messages");
+  const colB = collection(db, "conversations", String(conversationId), "msgs");
 
-    const mount = (subcol = "messages") => {
-      if (typeof unsub === "function") {
-        unsub();
-        unsub = null;
-      }
-      const qRef = query(
-        collection(db, "conversations", String(conversationId), subcol),
-        orderBy("timestamp", "asc")
-      );
-      unsub = onSnapshot(
-        qRef,
-        (snap) => {
-          const arr = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-          setMsgs(arr);
+  const qA = query(colA, orderBy("timestamp", "asc"));
+  const qB = query(colB, orderBy("timestamp", "asc"));
 
-          if (firstEmission && arr.length === 0 && !triedAlt && subcol === "messages") {
-            triedAlt = true;
-            mount("msgs");
-          }
-          firstEmission = false;
-        },
-        (err) => {
-          console.error(`onSnapshot(${subcol}) error:`, err);
-          if (!triedAlt && subcol === "messages") {
-            triedAlt = true;
-            mount("msgs");
-          }
-        }
-      );
-    };
+  let a = [];
+  let b = [];
 
-    mount("messages");
+  const applyMerge = () => {
+    // merge + dedupe por id
+    const map = new Map();
+    for (const m of a) map.set(m.id, m);
+    for (const m of b) map.set(m.id, m);
 
-    return () => {
-      if (typeof unsub === "function") unsub();
-    };
-  }, [conversationId, canRead]);
+    // ordenar por timestamp asc (tolerante a null)
+    const arr = Array.from(map.values()).sort((m1, m2) => {
+      const t1 = m1?.timestamp?.toMillis?.() ?? (m1?.timestamp ? new Date(m1.timestamp).getTime() : 0);
+      const t2 = m2?.timestamp?.toMillis?.() ?? (m2?.timestamp ? new Date(m2.timestamp).getTime() : 0);
+      return t1 - t2;
+    });
 
-  // ---------- auto-scroll ----------
+    setMsgs(arr);
+  };
+
+  const unsubA = onSnapshot(
+    qA,
+    (snap) => {
+      a = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      applyMerge();
+    },
+    (err) => console.error("onSnapshot(messages) error:", err)
+  );
+
+  const unsubB = onSnapshot(
+    qB,
+    (snap) => {
+      b = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      applyMerge();
+    },
+    (err) => console.error("onSnapshot(msgs) error:", err)
+  );
+
+  return () => {
+    unsubA?.();
+    unsubB?.();
+  };
+}, [conversationId, canRead]);
+
+
+  // auto-scroll
   const scrollToBottom = (behavior = "auto") => {
     const el = viewportRef.current;
     if (!el) return;
@@ -340,7 +364,7 @@ export default function ChatWindow({ conversationId, onBack }) {
     if (nearBottom) scrollToBottom("smooth");
   }, [msgs, tab]);
 
-  // ---------- UI helpers ----------
+  // UI helpers
   const removeTag = async (slug) => {
     if (!conversationId || !slug) return;
     try {
@@ -368,7 +392,7 @@ export default function ChatWindow({ conversationId, onBack }) {
     el.style.height = h + "px";
   }, [text]);
 
-  // contexto para plantillas
+  // contexto plantillas
   const templateContext = {
     nombre: contact?.name || contact?.fullName || "",
     vendedor: user?.displayName || user?.email || "",
@@ -416,12 +440,16 @@ export default function ChatWindow({ conversationId, onBack }) {
       .then((r) => {
         const serverConvId = r?.results?.[0]?.to;
         if (serverConvId && serverConvId !== conversationId) {
-          navigate(`/app/${encodeURIComponent(serverConvId)}`, { replace: true });
+          navigate(`/app/${encodeURIComponent(serverConvId)}`, {
+            replace: true,
+          });
         }
         if (r && r.ok === false) {
           const err = r?.results?.[0]?.error;
           const code =
-            err?.error?.code ?? err?.code ?? (typeof err === "string" ? err : "");
+            err?.error?.code ??
+            err?.code ??
+            (typeof err === "string" ? err : "");
           alert(`No se pudo enviar.\nCódigo: ${code || "desconocido"}`);
         }
         scrollToBottom("smooth");
@@ -431,7 +459,7 @@ export default function ChatWindow({ conversationId, onBack }) {
       });
   };
 
-  // adjuntos (imagen / audio)
+  // adjuntos
   const handlePickAndSend = async (file, kind /* "image" | "audio" */) => {
     if (!file || !conversationId || !canWrite) return;
     try {
@@ -466,7 +494,7 @@ export default function ChatWindow({ conversationId, onBack }) {
     if (file) await handlePickAndSend(file, "audio");
   };
 
-  // cerrar menú adjuntos en click afuera / Esc
+  // cerrar menús
   useEffect(() => {
     if (!showAttachMenu) return;
     const onDocClick = (e) => {
@@ -489,12 +517,12 @@ export default function ChatWindow({ conversationId, onBack }) {
     };
   }, [showAttachMenu]);
 
-  // cerrar emoji picker en click afuera / Esc
   useEffect(() => {
     if (!showEmojiPicker) return;
     const onDocClick = (e) => {
       if (!emojiPickerRef.current) return;
-      if (!emojiPickerRef.current.contains(e.target)) setShowEmojiPicker(false);
+      if (!emojiPickerRef.current.contains(e.target))
+        setShowEmojiPicker(false);
     };
     const onEsc = (e) => e.key === "Escape" && setShowEmojiPicker(false);
     document.addEventListener("click", onDocClick);
@@ -670,24 +698,27 @@ export default function ChatWindow({ conversationId, onBack }) {
                 // PREVIEW FIX — tipo + mediaUrl
                 const mediaUrl = resolveMediaUrl(m);
                 const type =
-                  m?.media?.kind || // <-- primero el "kind" del backend (image/audio/sticker)
-                  m?.mediaKind ||   // <-- también revisar mediaKind directo
+                  m?.media?.kind ||
+                  m?.mediaKind ||
                   m?.type ||
                   (m?.image ? "image" : m?.audio ? "audio" : "text");
 
-                const wrapperClass = `flex w-full ${isOut ? "justify-end" : "justify-start"}`;
+                const wrapperClass = `flex w-full ${
+                  isOut ? "justify-end" : "justify-start"
+                }`;
                 const bubbleClass = isOut
                   ? "bg-gradient-to-r from-[#2E7D32] to-[#388E3C] text-white rounded-2xl rounded-br-md shadow-sm"
                   : "bg-white border border-[#E0EDE4] text-gray-800 rounded-2xl rounded-bl-md shadow-sm";
 
-                const visibleText =
-                  typeof m?.text === "string"
-                    ? m.text
-                    : m?.template
-                    ? `[template] ${m.template}`
-                    : typeof m?.text === "object"
-                    ? JSON.stringify(m?.text || "")
-                    : m?.caption || "";
+                const visibleText = getVisibleText(m);
+
+                // Si WhatsApp marcó image pero no hay URL utilizable, degradamos a texto/caption
+                const effectiveType =
+                  type === "image" && !mediaUrl
+                    ? visibleText
+                      ? "text"
+                      : "image"
+                    : type;
 
                 return (
                   <div key={m.id} className={wrapperClass}>
@@ -700,7 +731,9 @@ export default function ChatWindow({ conversationId, onBack }) {
                       >
                         <span
                           className={`px-2 py-[2px] rounded-full border ${
-                            isOut ? "border-[#2E7D32]/40 bg-[#E6F2E8]" : "border-gray-300 bg-gray-50"
+                            isOut
+                              ? "border-[#2E7D32]/40 bg-[#E6F2E8]"
+                              : "border-gray-300 bg-gray-50"
                           }`}
                         >
                           {isOut ? "Yo" : "Cliente"}
@@ -709,40 +742,116 @@ export default function ChatWindow({ conversationId, onBack }) {
 
                       <div className={`px-4 py-3 ${bubbleClass}`}>
                         {/* PREVIEW FIX — Render */}
-                        {type === "image" && mediaUrl ? (
-                          <img
-                            src={mediaUrl}
-                            alt="Imagen"
-                            className="max-w-full rounded-lg"
-                            loading="lazy"
-                            onError={(e) => {
-                              e.currentTarget.style.display = "none";
-                              const fallback = e.currentTarget.nextSibling;
-                              if (fallback) fallback.style.display = "block";
-                            }}
-                          />
-                        ) : type === "image" && (m.mediaError === "URL_NOT_AVAILABLE" || m.mediaError === "MEDIA_EXPIRED" || m.mediaError === "DOWNLOAD_FAILED_EXPIRED") ? (
-                          // Placeholder para imágenes con media expirada o error de descarga
-                          <div className={`flex flex-col items-center gap-2 p-4 rounded-lg border-2 border-dashed ${
-                            isOut ? "border-white/30 bg-white/10" : "border-gray-300 bg-gray-50"
-                          }`}>
-                            <ImageIcon className={`w-8 h-8 ${isOut ? "text-white/60" : "text-gray-400"}`} />
-                            <div className={`text-sm text-center ${isOut ? "text-white/80" : "text-gray-600"}`}>
+                        {effectiveType === "image" && mediaUrl ? (
+                          <>
+                            <img
+                              src={mediaUrl}
+                              alt="Imagen"
+                              className="max-w-full rounded-lg"
+                              loading="lazy"
+                              onError={(e) => {
+                                // Ocultar imagen rota y mostrar fallback
+                                e.currentTarget.style.display = "none";
+                                const fallback = e.currentTarget.nextSibling;
+                                if (fallback) fallback.style.display = "block";
+                              }}
+                            />
+                            {/* Fallback visible */}
+                            <div style={{ display: "none" }}>
+                              <div
+                                className={`mt-2 flex flex-col items-center gap-2 p-4 rounded-lg border-2 border-dashed ${
+                                  isOut
+                                    ? "border-white/30 bg-white/10"
+                                    : "bg-gray-50 border-gray-300"
+                                }`}
+                              >
+                                <ImageIcon
+                                  className={`w-8 h-8 ${
+                                    isOut ? "text-white/60" : "text-gray-400"
+                                  }`}
+                                />
+                                <div
+                                  className={`text-sm text-center ${
+                                    isOut ? "text-white/80" : "text-gray-600"
+                                  }`}
+                                >
+                                  Imagen no disponible
+                                </div>
+                                <a
+                                  href={mediaUrl || "#"}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className={`btn btn-xs ${
+                                    isOut ? "text-white bg-white/20" : "bg-white"
+                                  } border ${
+                                    isOut
+                                      ? "border-white/30"
+                                      : "border-gray-300"
+                                  }`}
+                                  title="Abrir en pestaña nueva"
+                                >
+                                  <ExternalLink className="mr-1 w-3 h-3" />
+                                  Abrir
+                                </a>
+                                {visibleText ? (
+                                  <div
+                                    className={`text-xs text-center ${
+                                      isOut
+                                        ? "text-white/80"
+                                        : "text-gray-600"
+                                    }`}
+                                  >
+                                    {visibleText}
+                                  </div>
+                                ) : null}
+                              </div>
+                            </div>
+                          </>
+                        ) : effectiveType === "image" &&
+                          (m.mediaError === "URL_NOT_AVAILABLE" ||
+                            m.mediaError === "MEDIA_EXPIRED" ||
+                            m.mediaError === "DOWNLOAD_FAILED_EXPIRED") ? (
+                          <div
+                            className={`flex flex-col items-center gap-2 p-4 rounded-lg border-2 border-dashed ${
+                              isOut
+                                ? "border-white/30 bg-white/10"
+                                : "bg-gray-50 border-gray-300"
+                            }`}
+                          >
+                            <ImageIcon
+                              className={`w-8 h-8 ${
+                                isOut ? "text-white/60" : "text-gray-400"
+                              }`}
+                            />
+                            <div
+                              className={`text-sm text-center ${
+                                isOut ? "text-white/80" : "text-gray-600"
+                              }`}
+                            >
                               <div>Imagen no disponible</div>
-                              <div className="text-xs mt-1">
-                                {m.mediaError === "MEDIA_EXPIRED" 
-                                  ? "Media expirada (>48h)" 
+                              <div className="mt-1 text-xs">
+                                {m.mediaError === "MEDIA_EXPIRED"
+                                  ? "Media expirada (>48h)"
                                   : m.mediaError === "DOWNLOAD_FAILED_EXPIRED"
                                   ? "Descarga falló - Media expirada"
                                   : "ID de media expirado"}
                               </div>
                             </div>
+                            {visibleText ? (
+                              <div
+                                className={`text-xs text-center ${
+                                  isOut ? "text-white/80" : "text-gray-600"
+                                }`}
+                              >
+                                {visibleText}
+                              </div>
+                            ) : null}
                           </div>
-                        ) : type === "sticker" ? (
+                        ) : effectiveType === "sticker" ? (
                           <div className="flex flex-col gap-2 items-center">
-                            {mediaUrl ? (
+                            {resolveMediaUrl(m) ? (
                               <img
-                                src={mediaUrl}
+                                src={resolveMediaUrl(m)}
                                 alt="Sticker"
                                 className="max-w-[160px] max-h-[160px] rounded-lg"
                                 loading="lazy"
@@ -755,30 +864,53 @@ export default function ChatWindow({ conversationId, onBack }) {
                             ) : null}
                             <span
                               className={`text-xs px-2 py-1 rounded-full ${
-                                isOut ? "text-white bg-white/20" : "text-gray-600 bg-gray-100"
+                                isOut
+                                  ? "text-white bg-white/20"
+                                  : "text-gray-600 bg-gray-100"
                               }`}
                             >
                               Sticker
                             </span>
                             <div
                               style={{ display: "none" }}
-                              className={`text-sm ${isOut ? "text-white/80" : "text-gray-600"}`}
+                              className={`text-sm ${
+                                isOut ? "text-white/80" : "text-gray-600"
+                              }`}
                             >
                               Sticker no disponible
                             </div>
                           </div>
-                        ) : type === "audio" && mediaUrl ? (
+                        ) : effectiveType === "audio" && mediaUrl ? (
                           <audio controls className="max-w-full">
                             <source src={mediaUrl} />
                           </audio>
                         ) : (
                           <div className="leading-relaxed whitespace-pre-wrap break-words">
                             {visibleText}
+                            {m.status === "error" && (
+                              <div
+                                className={`mt-2 text-xs flex items-center gap-1 ${
+                                  isOut ? "text-red-200" : "text-red-500"
+                                }`}
+                              >
+                                <span>⚠️</span>
+                                <span>Error al enviar</span>
+                                {m.error?.message && (
+                                  <span className="opacity-75">
+                                    - {m.error.message}
+                                  </span>
+                                )}
+                              </div>
+                            )}
                           </div>
                         )}
 
                         <div className="flex gap-2 justify-between items-center mt-2">
-                          <div className={`text-xs ${isOut ? "text-white/80" : "text-gray-500"}`}>
+                          <div
+                            className={`text-xs ${
+                              isOut ? "text-white/80" : "text-gray-500"
+                            }`}
+                          >
                             {formatTs(m.timestamp)}
                           </div>
                           {canWrite && (
@@ -811,8 +943,20 @@ export default function ChatWindow({ conversationId, onBack }) {
 
             <div className="relative flex items-end gap-2 rounded-xl border border-[#CDEBD6] bg-white p-2 shadow-sm">
               {/* pickers ocultos */}
-              <input ref={imageInputRef} type="file" accept="image/*" hidden onChange={onPickImage} />
-              <input ref={audioInputRef} type="file" accept="audio/*" hidden onChange={onPickAudio} />
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/*"
+                hidden
+                onChange={onPickImage}
+              />
+              <input
+                ref={audioInputRef}
+                type="file"
+                accept="audio/*"
+                hidden
+                onChange={onPickAudio}
+              />
 
               {/* Adjuntos */}
               <div className="relative">
@@ -850,7 +994,10 @@ export default function ChatWindow({ conversationId, onBack }) {
                       Audio
                     </button>
                     <div className="w-full">
-                      <AudioRecorderButton conversationId={conversationId} canWrite={canWrite} />
+                      <AudioRecorderButton
+                        conversationId={conversationId}
+                        canWrite={canWrite}
+                      />
                     </div>
                   </div>
                 )}
@@ -894,12 +1041,117 @@ export default function ChatWindow({ conversationId, onBack }) {
                   >
                     <div className="grid grid-cols-8 gap-1">
                       {[
-                        "😀","😃","😄","😁","😆","😅","😂","🤣","😊","😇","🙂","🙃","😉","😌","😍","🥰","😘","😗","😙","😚",
-                        "😋","😛","😝","😜","🤪","🤨","🧐","🤓","😎","🤩","🥳","😏","😒","😞","😔","😟","😕","🙁","☹️","😣",
-                        "😖","😫","😩","🥺","😢","😭","😤","😠","😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🤗",
-                        "🤔","🤭","🤫","🤥","😶","😐","😑","😬","🙄","😯","😦","😧","😮","😲","🥱","😴","🤤","😪","😵","🤐",
-                        "🥴","🤢","🤮","🤧","😷","🤒","🤕","🤑","🤠","😈","👿","👹","👺","🤡","💩","👻","💀","☠️","👽","👾",
-                        "🤖","🎃","😺","😸","😹","😻","😼","😽","🙀","😿","😾"
+                        "😀",
+                        "😃",
+                        "😄",
+                        "😁",
+                        "😆",
+                        "😅",
+                        "😂",
+                        "🤣",
+                        "😊",
+                        "😇",
+                        "🙂",
+                        "🙃",
+                        "😉",
+                        "😌",
+                        "😍",
+                        "🥰",
+                        "😘",
+                        "😗",
+                        "😙",
+                        "😚",
+                        "😋",
+                        "😛",
+                        "😝",
+                        "😜",
+                        "🤪",
+                        "🤨",
+                        "🧐",
+                        "🤓",
+                        "😎",
+                        "🤩",
+                        "🥳",
+                        "😏",
+                        "😒",
+                        "😞",
+                        "😔",
+                        "😟",
+                        "😕",
+                        "🙁",
+                        "☹️",
+                        "😣",
+                        "😖",
+                        "😫",
+                        "😩",
+                        "🥺",
+                        "😢",
+                        "😭",
+                        "😤",
+                        "😠",
+                        "😡",
+                        "🤬",
+                        "🤯",
+                        "😳",
+                        "🥵",
+                        "🥶",
+                        "😱",
+                        "😨",
+                        "😰",
+                        "😥",
+                        "😓",
+                        "🤗",
+                        "🤔",
+                        "🤭",
+                        "🤫",
+                        "🤥",
+                        "😶",
+                        "😐",
+                        "😑",
+                        "😬",
+                        "🙄",
+                        "😯",
+                        "😦",
+                        "😧",
+                        "😮",
+                        "😲",
+                        "🥱",
+                        "😴",
+                        "🤤",
+                        "😪",
+                        "😵",
+                        "🤐",
+                        "🥴",
+                        "🤢",
+                        "🤮",
+                        "🤧",
+                        "😷",
+                        "🤒",
+                        "🤕",
+                        "🤑",
+                        "🤠",
+                        "😈",
+                        "👿",
+                        "👹",
+                        "👺",
+                        "🤡",
+                        "💩",
+                        "👻",
+                        "💀",
+                        "☠️",
+                        "👽",
+                        "👾",
+                        "🤖",
+                        "🎃",
+                        "😺",
+                        "😸",
+                        "😹",
+                        "😻",
+                        "😼",
+                        "😽",
+                        "🙀",
+                        "😿",
+                        "😾",
                       ].map((emoji) => (
                         <button
                           key={emoji}
@@ -919,7 +1171,11 @@ export default function ChatWindow({ conversationId, onBack }) {
                 onClick={doSend}
                 disabled={!text.trim() || !canWrite}
                 className="gap-2 btn"
-                style={{ backgroundColor: "#2E7D32", borderColor: "#2E7D32", color: "#fff" }}
+                style={{
+                  backgroundColor: "#2E7D32",
+                  borderColor: "#2E7D32",
+                  color: "#fff",
+                }}
                 title="Enviar (Enter)"
               >
                 <SendIcon className="w-4 h-4" />
@@ -935,12 +1191,19 @@ export default function ChatWindow({ conversationId, onBack }) {
         <div className="fixed inset-y-0 right-0 z-[80] w-full max-w-md border-l border-[#CDEBD6] bg-base-100 shadow-xl">
           <div className="flex items-center justify-between border-b border-[#CDEBD6] p-3">
             <h3 className="font-semibold">Perfil de cliente</h3>
-            <button className="btn btn-ghost btn-sm" onClick={() => setShowProfile(false)}>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => setShowProfile(false)}
+            >
               Cerrar
             </button>
           </div>
           <div className="overflow-auto p-3 h-full">
-            <ClientProfile contactId={contactId} phone={phone} conversationId={conversationId} />
+            <ClientProfile
+              contactId={contactId}
+              phone={phone}
+              conversationId={conversationId}
+            />
           </div>
         </div>
       )}
@@ -957,7 +1220,10 @@ export default function ChatWindow({ conversationId, onBack }) {
           >
             <div className="flex justify-between items-center p-3 border-b">
               <h3 className="font-semibold">Etiquetas</h3>
-              <button className="btn btn-ghost btn-sm" onClick={() => setShowTags(false)}>
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => setShowTags(false)}
+              >
                 Cerrar
               </button>
             </div>

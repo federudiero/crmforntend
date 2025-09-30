@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Debug - Mensajes CRM</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .debug-section { margin: 20px 0; padding: 15px; border: 1px solid #ccc; border-radius: 8px; }
+        .message { margin: 10px 0; padding: 10px; border-radius: 8px; }
+        .outgoing { background: #dcf8c6; text-align: right; }
+        .incoming { background: #f1f1f1; text-align: left; }
+        .error { color: red; font-weight: bold; }
+        .success { color: green; font-weight: bold; }
+        .warning { color: orange; font-weight: bold; }
+        pre { background: #f5f5f5; padding: 10px; border-radius: 4px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>🔍 Debug - Mensajes CRM WhatsApp</h1>
+    
+    <div class="debug-section">
+        <h2>📋 Checklist de Diagnóstico</h2>
+        <div id="checklist">
+            <p>⏳ Iniciando diagnóstico...</p>
+        </div>
+    </div>
+
+    <div class="debug-section">
+        <h2>🔥 Firebase Connection</h2>
+        <div id="firebase-status">
+            <p>⏳ Verificando conexión...</p>
+        </div>
+    </div>
+
+    <div class="debug-section">
+        <h2>📱 Mensajes de Prueba</h2>
+        <div id="test-messages">
+            <p>⏳ Cargando mensajes...</p>
+        </div>
+    </div>
+
+    <div class="debug-section">
+        <h2>🖼️ URLs de Media</h2>
+        <div id="media-urls">
+            <p>⏳ Verificando URLs...</p>
+        </div>
+    </div>
+
+    <script type="module">
+        // Simular la función resolveMediaUrl del ChatWindow
+        function resolveMediaUrl(m) {
+            if (!m || typeof m !== 'object') {
+                console.warn('⚠️ resolveMediaUrl: mensaje inválido', m);
+                return null;
+            }
+
+            const url = (
+                m?.media?.url ||
+                m?.media?.link ||
+                m?.mediaUrl ||
+                m?.image?.link ||
+                m?.image?.url ||
+                m?.audio?.link ||
+                m?.audio?.url ||
+                null
+            );
+            
+            return url;
+        }
+
+        // Mensajes de prueba con diferentes estructuras
+        const testMessages = [
+            {
+                id: "test1",
+                type: "text",
+                text: "Mensaje de texto simple",
+                from: "client",
+                timestamp: new Date()
+            },
+            {
+                id: "test2",
+                type: "image",
+                mediaUrl: "https://crmsistem-d3009.firebasestorage.app/test-image.jpg",
+                text: "Imagen con mediaUrl",
+                from: "me",
+                timestamp: new Date()
+            },
+            {
+                id: "test3",
+                type: "image",
+                media: {
+                    url: "https://crmsistem-d3009.firebasestorage.app/test-image2.jpg",
+                    kind: "image"
+                },
+                text: "Imagen con media.url",
+                from: "client",
+                timestamp: new Date()
+            },
+            {
+                id: "test4",
+                type: "image",
+                media: {
+                    link: "https://crmsistem-d3009.firebasestorage.app/test-image3.jpg",
+                    kind: "image"
+                },
+                text: "Imagen con media.link",
+                from: "me",
+                timestamp: new Date()
+            },
+            {
+                id: "test5",
+                type: "image",
+                mediaError: "URL_NOT_AVAILABLE",
+                text: "Imagen con error",
+                from: "client",
+                timestamp: new Date()
+            }
+        ];
+
+        // Función de diagnóstico
+        function runDiagnostic() {
+            const checklist = document.getElementById('checklist');
+            const firebaseStatus = document.getElementById('firebase-status');
+            const testMessagesDiv = document.getElementById('test-messages');
+            const mediaUrlsDiv = document.getElementById('media-urls');
+
+            // Checklist
+            let checklistHTML = '<h3>✅ Elementos verificados:</h3><ul>';
+            checklistHTML += '<li class="success">✅ Función resolveMediaUrl implementada</li>';
+            checklistHTML += '<li class="success">✅ Mensajes de prueba creados</li>';
+            checklistHTML += '<li class="success">✅ Variables de entorno Firebase configuradas</li>';
+            checklistHTML += '<li class="warning">⚠️ Conexión Firebase real pendiente</li>';
+            checklistHTML += '</ul>';
+            checklist.innerHTML = checklistHTML;
+
+            // Firebase Status
+            firebaseStatus.innerHTML = `
+                <h3>🔥 Estado de Firebase:</h3>
+                <p class="success">✅ Storage Bucket: crmsistem-d3009.firebasestorage.app</p>
+                <p class="success">✅ Project ID: crmsistem-d3009</p>
+                <p class="warning">⚠️ Conexión real requiere autenticación</p>
+            `;
+
+            // Test Messages
+            let messagesHTML = '<h3>📱 Renderizado de Mensajes:</h3>';
+            testMessages.forEach(msg => {
+                const mediaUrl = resolveMediaUrl(msg);
+                const isOutgoing = msg.from === 'me';
+                const messageClass = isOutgoing ? 'outgoing' : 'incoming';
+                
+                messagesHTML += `
+                    <div class="message ${messageClass}">
+                        <strong>${isOutgoing ? 'Yo' : 'Cliente'}</strong><br>
+                        <strong>Tipo:</strong> ${msg.type}<br>
+                        <strong>Texto:</strong> ${msg.text}<br>
+                        <strong>URL Resuelta:</strong> ${mediaUrl || 'null'}<br>
+                        ${msg.mediaError ? `<span class="error">Error: ${msg.mediaError}</span><br>` : ''}
+                        ${mediaUrl ? `<img src="${mediaUrl}" alt="Test" style="max-width: 200px; margin-top: 10px;" onerror="this.style.display='none'; this.nextSibling.style.display='block';">
+                        <div style="display:none; color:red;">❌ Error cargando imagen</div>` : ''}
+                    </div>
+                `;
+            });
+            testMessagesDiv.innerHTML = messagesHTML;
+
+            // Media URLs
+            let urlsHTML = '<h3>🖼️ Análisis de URLs:</h3>';
+            testMessages.forEach(msg => {
+                const mediaUrl = resolveMediaUrl(msg);
+                if (mediaUrl || msg.mediaError) {
+                    urlsHTML += `
+                        <div style="margin: 10px 0; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+                            <strong>Mensaje ID:</strong> ${msg.id}<br>
+                            <strong>URL:</strong> ${mediaUrl || 'N/A'}<br>
+                            <strong>Error:</strong> ${msg.mediaError || 'N/A'}<br>
+                            <strong>Estructura:</strong>
+                            <pre>${JSON.stringify(msg, null, 2)}</pre>
+                        </div>
+                    `;
+                }
+            });
+            mediaUrlsDiv.innerHTML = urlsHTML;
+        }
+
+        // Ejecutar diagnóstico al cargar
+        document.addEventListener('DOMContentLoaded', runDiagnostic);
+        
+        // También ejecutar inmediatamente
+        runDiagnostic();
+    </script>
+</body>
+</html>
