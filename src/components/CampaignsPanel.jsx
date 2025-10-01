@@ -114,17 +114,17 @@ export default function CampaignsPanel() {
         <div className="space-y-2">
           <div className="p-3 rounded bg-base-200">
             <div className="font-medium">Variante A</div>
-            <input className="w-full mt-1 input input-bordered" placeholder="Nombre plantilla A"
+            <input className="mt-1 w-full input input-bordered" placeholder="Nombre plantilla A"
               value={form.aTemplate} onChange={e => setForm(f => ({ ...f, aTemplate: e.target.value }))} />
-            <textarea className="w-full mt-1 textarea textarea-bordered" placeholder='Variables (JSON), ej: ["Fede"]'
+            <textarea className="mt-1 w-full textarea textarea-bordered" placeholder='Variables (JSON), ej: ["Fede"]'
               value={form.aVars} onChange={e => setForm(f => ({ ...f, aVars: e.target.value }))} />
           </div>
 
           <div className={"p-3 rounded " + (form.abEnabled ? "bg-base-200" : "bg-base-300 opacity-60 pointer-events-none")}>
             <div className="font-medium">Variante B</div>
-            <input className="w-full mt-1 input input-bordered" placeholder="Nombre plantilla B"
+            <input className="mt-1 w-full input input-bordered" placeholder="Nombre plantilla B"
               value={form.bTemplate} onChange={e => setForm(f => ({ ...f, bTemplate: e.target.value }))} />
-            <textarea className="w-full mt-1 textarea textarea-bordered" placeholder='Variables (JSON)'
+            <textarea className="mt-1 w-full textarea textarea-bordered" placeholder='Variables (JSON)'
               value={form.bVars} onChange={e => setForm(f => ({ ...f, bVars: e.target.value }))} />
             <label className="mt-2 text-sm">Split (%) para A (resto va a B)</label>
             <input type="number" className="w-full input input-bordered"
@@ -134,7 +134,7 @@ export default function CampaignsPanel() {
         </div>
       </div>
 
-      <div className="flex justify-end gap-2">
+      <div className="flex gap-2 justify-end">
         <button className="btn btn-primary" onClick={save}>Guardar campaña</button>
       </div>
 

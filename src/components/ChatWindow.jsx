@@ -6,6 +6,7 @@ import {
   collection,
   doc,
   getDoc,
+  limit,
   onSnapshot,
   orderBy,
   query,
@@ -140,6 +141,14 @@ export default function ChatWindow({ conversationId, onBack }) {
   const [sending, setSending] = useState(false);
   const [text, setText] = useState("");
 
+  // Estados para paginación de mensajes
+  const [messageLimit, setMessageLimit] = useState(50);
+  const [hasMoreMessages, setHasMoreMessages] = useState(false);
+
+  // Estados para archivos seleccionados (envío manual)
+  const [selectedImage, setSelectedImage] = useState(null);
+  const [selectedAudio, setSelectedAudio] = useState(null);
+
   const [convSlugs, setConvSlugs] = useState([]);
   const [allLabels, setAllLabels] = useState([]);
 
@@ -153,6 +162,11 @@ export default function ChatWindow({ conversationId, onBack }) {
 
   // EMOJI PICKER
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+
+
+  // Modal imagen
+const [imagePreviewUrl, setImagePreviewUrl] = useState(null);
+
 
   // ---- refs ----
   const viewportRef = useRef(null);
@@ -174,6 +188,12 @@ export default function ChatWindow({ conversationId, onBack }) {
     setTab("chat");
     setShowAttachMenu(false);
     setShowEmojiPicker(false);
+    // Resetear estados de paginación
+    setMessageLimit(50);
+    setHasMoreMessages(false);
+    // Limpiar archivos seleccionados
+    setSelectedImage(null);
+    setSelectedAudio(null);
     didInitialAutoScroll.current = false;
     requestAnimationFrame(() => viewportRef.current?.scrollTo({ top: 0 }));
   }, [conversationId]);
@@ -291,8 +311,9 @@ useEffect(() => {
   const colA = collection(db, "conversations", String(conversationId), "messages");
   const colB = collection(db, "conversations", String(conversationId), "msgs");
 
-  const qA = query(colA, orderBy("timestamp", "asc"));
-  const qB = query(colB, orderBy("timestamp", "asc"));
+  // Aplicar límite a las queries para optimizar la carga
+  const qA = query(colA, orderBy("timestamp", "desc"), limit(messageLimit));
+  const qB = query(colB, orderBy("timestamp", "desc"), limit(messageLimit));
 
   let a = [];
   let b = [];
@@ -303,12 +324,17 @@ useEffect(() => {
     for (const m of a) map.set(m.id, m);
     for (const m of b) map.set(m.id, m);
 
-    // ordenar por timestamp asc (tolerante a null)
+    // ordenar por timestamp asc (tolerante a null) para mostrar cronológicamente
     const arr = Array.from(map.values()).sort((m1, m2) => {
       const t1 = m1?.timestamp?.toMillis?.() ?? (m1?.timestamp ? new Date(m1.timestamp).getTime() : 0);
       const t2 = m2?.timestamp?.toMillis?.() ?? (m2?.timestamp ? new Date(m2.timestamp).getTime() : 0);
       return t1 - t2;
     });
+
+    // Verificar si hay más mensajes disponibles
+    const totalMessages = a.length + b.length;
+    const uniqueMessages = arr.length;
+    setHasMoreMessages(uniqueMessages >= messageLimit && (a.length === messageLimit || b.length === messageLimit));
 
     setMsgs(arr);
   };
@@ -335,7 +361,13 @@ useEffect(() => {
     unsubA?.();
     unsubB?.();
   };
-}, [conversationId, canRead]);
+}, [conversationId, canRead, messageLimit]);
+
+useEffect(() => {
+  const onEsc = (e) => e.key === "Escape" && setImagePreviewUrl(null);
+  document.addEventListener("keydown", onEsc);
+  return () => document.removeEventListener("keydown", onEsc);
+}, []);
 
 
   // auto-scroll
@@ -363,6 +395,11 @@ useEffect(() => {
 
     if (nearBottom) scrollToBottom("smooth");
   }, [msgs, tab]);
+
+  // Función para cargar más mensajes
+  const loadMoreMessages = () => {
+    setMessageLimit(prev => prev + 50);
+  };
 
   // UI helpers
   const removeTag = async (slug) => {
@@ -428,35 +465,81 @@ useEffect(() => {
     setShowEmojiPicker(false);
   };
 
-  // envío texto
-  const doSend = () => {
+  // envío texto y archivos multimedia
+  const doSend = async () => {
     const body = (text || "").trim();
-    if (!conversationId || !body || !canWrite) return;
+    const hasText = !!body;
+    const hasImage = !!selectedImage;
+    const hasAudio = !!selectedAudio;
 
+    // Verificar que hay algo que enviar (texto, imagen o audio)
+    if (!conversationId || (!hasText && !hasImage && !hasAudio) || !canWrite) return;
+
+    // Limpiar estados inmediatamente
     setText("");
+    const imageToSend = selectedImage;
+    const audioToSend = selectedAudio;
+    setSelectedImage(null);
+    setSelectedAudio(null);
+    
     requestAnimationFrame(() => textareaRef.current?.focus());
 
-    sendMessage({ to: String(conversationId), text: body, conversationId })
-      .then((r) => {
-        const serverConvId = r?.results?.[0]?.to;
+    try {
+      // Enviar texto si existe
+      if (hasText) {
+        const textResult = await sendMessage({ 
+          to: String(conversationId), 
+          text: body, 
+          conversationId 
+        });
+        
+        const serverConvId = textResult?.results?.[0]?.to;
         if (serverConvId && serverConvId !== conversationId) {
           navigate(`/app/${encodeURIComponent(serverConvId)}`, {
             replace: true,
           });
         }
-        if (r && r.ok === false) {
-          const err = r?.results?.[0]?.error;
+        if (textResult && textResult.ok === false) {
+          const err = textResult?.results?.[0]?.error;
           const code =
             err?.error?.code ??
             err?.code ??
             (typeof err === "string" ? err : "");
-          alert(`No se pudo enviar.\nCódigo: ${code || "desconocido"}`);
+          alert(`No se pudo enviar el texto.\nCódigo: ${code || "desconocido"}`);
         }
-        scrollToBottom("smooth");
-      })
-      .catch((e) => {
-        alert(e?.message || "No se pudo enviar");
-      });
+      }
+
+      // Enviar imagen si existe
+      if (hasImage && imageToSend) {
+        setSending(true);
+        const dest = `uploads/${conversationId}/${Date.now()}_${imageToSend.name}`;
+        const { url } = await uploadFile(imageToSend, dest);
+        await sendMessage({
+          to: String(conversationId),
+          conversationId,
+          image: { link: url }
+        });
+      }
+
+      // Enviar audio si existe
+      if (hasAudio && audioToSend) {
+        setSending(true);
+        const dest = `uploads/${conversationId}/${Date.now()}_${audioToSend.name}`;
+        const { url } = await uploadFile(audioToSend, dest);
+        await sendMessage({
+          to: String(conversationId),
+          conversationId,
+          audio: { link: url }
+        });
+      }
+
+      scrollToBottom("smooth");
+    } catch (e) {
+      alert(e?.message || "No se pudo enviar");
+    } finally {
+      setSending(false);
+      setShowAttachMenu(false);
+    }
   };
 
   // adjuntos
@@ -485,13 +568,19 @@ useEffect(() => {
   const onPickImage = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = "";
-    if (file) await handlePickAndSend(file, "image");
+    if (file) {
+      setSelectedImage(file);
+      setShowAttachMenu(false);
+    }
   };
 
   const onPickAudio = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = "";
-    if (file) await handlePickAndSend(file, "audio");
+    if (file) {
+      setSelectedAudio(file);
+      setShowAttachMenu(false);
+    }
   };
 
   // cerrar menús
@@ -685,6 +774,18 @@ useEffect(() => {
             ref={viewportRef}
             className="overflow-y-auto overflow-x-hidden flex-1 px-3 py-3 md:px-4 md:py-4"
           >
+            {/* Botón para cargar más mensajes antiguos */}
+            {hasMoreMessages && msgs.length > 0 && (
+              <div className="flex justify-center mb-4">
+                <button
+                  onClick={loadMoreMessages}
+                  className="px-4 py-2 text-sm font-medium text-[#2E7D32] bg-[#E8F5E9] border border-[#2E7D32]/20 rounded-lg hover:bg-[#CDEBD6] transition-colors duration-200"
+                >
+                  Cargar más antiguos
+                </button>
+              </div>
+            )}
+
             {msgs.length === 0 && (
               <div className="mx-auto rounded-xl border border-[#CDEBD6] bg-[#EAF7EE] p-4 text-center text-sm">
                 Sin mensajes todavía.
@@ -745,17 +846,17 @@ useEffect(() => {
                         {effectiveType === "image" && mediaUrl ? (
                           <>
                             <img
-                              src={mediaUrl}
-                              alt="Imagen"
-                              className="max-w-full rounded-lg"
-                              loading="lazy"
-                              onError={(e) => {
-                                // Ocultar imagen rota y mostrar fallback
-                                e.currentTarget.style.display = "none";
-                                const fallback = e.currentTarget.nextSibling;
-                                if (fallback) fallback.style.display = "block";
-                              }}
-                            />
+  src={mediaUrl}
+  alt="Imagen"
+  className="object-cover w-44 h-44 rounded-lg md:w-52 md:h-52 cursor-zoom-in"
+  loading="lazy"
+  onClick={() => setImagePreviewUrl(mediaUrl)}    
+  onError={(e) => {
+    e.currentTarget.style.display = "none";
+    const fallback = e.currentTarget.nextSibling;
+    if (fallback) fallback.style.display = "block";
+  }}
+/>
                             {/* Fallback visible */}
                             <div style={{ display: "none" }}>
                               <div
@@ -942,6 +1043,40 @@ useEffect(() => {
             <QuickRepliesBar onPick={onPickQuick} />
 
             <div className="relative flex items-end gap-2 rounded-xl border border-[#CDEBD6] bg-white p-2 shadow-sm">
+              {/* Mostrar archivos seleccionados */}
+              {(selectedImage || selectedAudio) && (
+                <div className="absolute -top-16 left-0 right-0 bg-white border border-[#CDEBD6] rounded-lg p-2 shadow-sm">
+                  <div className="flex gap-2 items-center text-sm text-gray-600">
+                    {selectedImage && (
+                      <div className="flex gap-2 items-center px-2 py-1 bg-blue-50 rounded">
+                        <ImageIcon className="w-4 h-4 text-blue-600" />
+                        <span className="truncate max-w-32">{selectedImage.name}</span>
+                        <button
+                          onClick={() => setSelectedImage(null)}
+                          className="ml-1 text-red-500 hover:text-red-700"
+                          title="Quitar imagen"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    )}
+                    {selectedAudio && (
+                      <div className="flex gap-2 items-center px-2 py-1 bg-green-50 rounded">
+                        <FileAudio2 className="w-4 h-4 text-green-600" />
+                        <span className="truncate max-w-32">{selectedAudio.name}</span>
+                        <button
+                          onClick={() => setSelectedAudio(null)}
+                          className="ml-1 text-red-500 hover:text-red-700"
+                          title="Quitar audio"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* pickers ocultos */}
               <input
                 ref={imageInputRef}
@@ -1169,7 +1304,7 @@ useEffect(() => {
               {/* Enviar */}
               <button
                 onClick={doSend}
-                disabled={!text.trim() || !canWrite}
+                disabled={!(text.trim() || selectedImage || selectedAudio) || !canWrite}
                 className="gap-2 btn"
                 style={{
                   backgroundColor: "#2E7D32",
@@ -1208,6 +1343,37 @@ useEffect(() => {
         </div>
       )}
 
+
+      {imagePreviewUrl && (
+  <div
+    className="fixed inset-0 z-[95] bg-black/70 grid place-items-center p-4"
+    onClick={() => setImagePreviewUrl(null)}  // click en backdrop cierra
+  >
+    <div
+      className="relative bg-white rounded-xl p-2 shadow-2xl max-w-[92vw]"
+      onClick={(e) => e.stopPropagation()}     // evita cerrar si clickeás dentro
+    >
+      <button
+        className="absolute top-2 right-2 btn btn-ghost btn-sm"
+        onClick={() => setImagePreviewUrl(null)}
+        title="Cerrar"
+      >
+        ✕
+      </button>
+
+      <img
+        src={imagePreviewUrl}
+        alt="Vista previa"
+        className="max-h-[80vh] max-w-[90vw] object-contain rounded-lg"
+        loading="eager"
+      />
+    </div>
+  </div>
+)}
+
+
+      
+
       {/* Modal de etiquetas */}
       {showTags && (
         <div
@@ -1238,6 +1404,10 @@ useEffect(() => {
           </div>
         </div>
       )}
+
+
+     
+
     </div>
   );
 }

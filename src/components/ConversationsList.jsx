@@ -1,5 +1,5 @@
 // src/components/ConversationsList.jsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { db } from "../firebase";
 import {
   collection,
@@ -14,6 +14,11 @@ import {
   arrayUnion,
   arrayRemove,
   deleteField,
+  // Paginado y batch fetch
+  getDocs,
+  where,
+  documentId,
+  startAfter,
 } from "firebase/firestore";
 import { useAuthState } from "../hooks/useAuthState.js";
 import LabelChips from "./LabelChips";
@@ -27,42 +32,116 @@ function formatShort(ts) {
 /** Normaliza slugs para usar como clave del índice */
 const normSlug = (s) => String(s ?? "").trim().toLowerCase();
 
+/** Chunk helper (para where(documentId(),'in',...)) */
+function chunk(array, size = 10) {
+  const out = [];
+  for (let i = 0; i < array.length; i += size) out.push(array.slice(i, i + size));
+  return out;
+}
+
+/** Skeleton simple */
+function RowSkeleton() {
+  return (
+    <div className="border-t px-3 py-3 border-[#E3EFE7] bg-white animate-pulse">
+      <div className="w-40 h-3 bg-gray-200 rounded" />
+      <div className="mt-2 w-56 h-2 bg-gray-200 rounded" />
+      <div className="mt-2 w-24 h-2 bg-gray-200 rounded" />
+    </div>
+  );
+}
+
 export default function ConversationsList({ activeId, onSelect }) {
   const { user } = useAuthState();
+
+  // Estado base (feed paginado)
   const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // Filtros UI existentes
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("todos"); // todos | mios | fav | etiquetas
   const [selectedLabel, setSelectedLabel] = useState("__all__");
 
-  // Suscripción a conversaciones (últimas 100 por actividad)
+  // ----------------------
+  //  P A G I N A D O  (para todos/mios/fav)
+  // ----------------------
+  const [pageSize, setPageSize] = useState(25); // 10/25/50
+  const [pageIndex, setPageIndex] = useState(0); // 0-based
+  const cursorsRef = useRef([]); // guarda docSnapshots (último de cada página)
+  const unsubRef = useRef(null); // limpiar subscripción actual
+
+  // Suscripción a conversaciones (paginada por actividad desc) — SOLO para tabs != 'etiquetas'
   useEffect(() => {
-    const qRef = query(
+    if (tab === "etiquetas") return; // no usamos el feed paginado en etiquetas
+    setLoading(true);
+
+    let qRef = query(
       collection(db, "conversations"),
       orderBy("lastMessageAt", "desc"),
-      limit(100)
+      limit(pageSize)
     );
 
-    const unsub = onSnapshot(
+    const cursor = cursorsRef.current[pageIndex - 1];
+    if (pageIndex > 0 && cursor) {
+      qRef = query(qRef, startAfter(cursor));
+    }
+
+    if (unsubRef.current) {
+      unsubRef.current();
+      unsubRef.current = null;
+    }
+
+    unsubRef.current = onSnapshot(
       qRef,
       async (snap) => {
-        const rows = await Promise.all(
-          snap.docs.map(async (d) => {
-            let contact = null;
-            try {
-              const c = await getDoc(doc(db, "contacts", d.id));
-              contact = c.exists() ? c.data() : null;
-            } catch (e) {
-              console.error(e);
+        try {
+          const docs = snap.docs;
+          const lastVisible = docs[docs.length - 1] || null;
+          if (lastVisible) cursorsRef.current[pageIndex] = lastVisible;
+
+          const rows = docs.map((d) => ({ id: d.id, ...d.data(), contact: null }));
+          const ids = rows.map((r) => r.id);
+          let contactsById = {};
+
+          if (ids.length > 0) {
+            const chunks = chunk(ids, 10);
+            const results = await Promise.all(
+              chunks.map((ids10) =>
+                getDocs(query(collection(db, "contacts"), where(documentId(), "in", ids10)))
+              )
+            );
+            for (const res of results) {
+              res.forEach((docSnap) => {
+                contactsById[docSnap.id] = docSnap.data();
+              });
             }
-            return { id: d.id, ...d.data(), contact };
-          })
-        );
-        setItems(rows);
+          }
+
+          const withContacts = rows.map((r) => ({
+            ...r,
+            contact: contactsById[r.id] || null,
+          }));
+
+          setItems(withContacts);
+        } catch (e) {
+          console.error("onSnapshot(conversations) paginated error:", e);
+        } finally {
+          setLoading(false);
+        }
       },
-      (err) => console.error("onSnapshot(conversations) error:", err)
+      (err) => {
+        console.error("onSnapshot(conversations) error:", err);
+        setLoading(false);
+      }
     );
-    return () => unsub();
-  }, []);
+
+    return () => {
+      if (unsubRef.current) {
+        unsubRef.current();
+        unsubRef.current = null;
+      }
+    };
+  }, [tab, pageIndex, pageSize]);
 
   // Helpers
   const isStarred = (c) =>
@@ -78,7 +157,7 @@ export default function ConversationsList({ activeId, onSelect }) {
     return c.assignedToUid === user.uid; // solo el dueño asignado
   };
 
-  // Acciones rápidas
+  // Acciones rápidas (conservadas)
   const toggleStar = async (c) => {
     if (!user?.uid) return;
     const ref = doc(db, "conversations", c.id);
@@ -155,7 +234,7 @@ export default function ConversationsList({ activeId, onSelect }) {
     }
   };
 
-  // Buscar por texto (nombre o número) + excluir eliminados
+  // Buscar por texto (nombre o número) + excluir eliminados (para feed paginado)
   const filteredByText = useMemo(() => {
     const q = search.trim().toLowerCase();
     const base = items.filter((c) => !c.deletedAt); // ocultar eliminados
@@ -167,7 +246,7 @@ export default function ConversationsList({ activeId, onSelect }) {
     });
   }, [items, search]);
 
-  // Filtros por pestaña (lista normal)
+  // Filtros por pestaña (lista normal, paginada)
   const filtered = useMemo(() => {
     const base = filteredByText;
     if (tab === "mios" && user?.uid) {
@@ -181,18 +260,106 @@ export default function ConversationsList({ activeId, onSelect }) {
     return base;
   }, [filteredByText, tab, user?.uid]);
 
-  // =========================
-  //   ETIQUETAS (MIS CHATS)
-  // =========================
-  const myForLabels = useMemo(() => {
-    if (!user?.uid) return [];
-    return filteredByText.filter((c) => c.assignedToUid === user.uid);
-  }, [filteredByText, user?.uid]);
+  // ==========================================
+  //   ETIQUETAS (TODAS, SIN PAGINACIÓN)
+  // ==========================================
+  const [labelsAll, setLabelsAll] = useState([]); // todas las convos asignadas a mí (sin paginar)
+  const [labelsLoading, setLabelsLoading] = useState(false);
+  const [labelsError, setLabelsError] = useState("");
 
-  /** Índice por etiqueta (clave normalizada), manteniendo nombre original */
+  // Cargar TODO para la vista "Por etiqueta"
+  useEffect(() => {
+    let cancelled = false;
+    async function loadAllForLabels() {
+      if (tab !== "etiquetas" || !user?.uid) return;
+      setLabelsLoading(true);
+      setLabelsError("");
+      try {
+        // Traemos todas las conversaciones ordenadas por actividad, por lotes.
+        // Filtramos por assignedToUid == user.uid en cliente si no existe índice;
+        // idealmente usar: query(collection(...), where('assignedToUid','==',uid), orderBy('lastMessageAt','desc'))
+        // pero respetamos tu modelo sin exigir índices nuevos.
+        const pageLim = 200; // lote grande para avanzar rápido
+        let qBase = query(
+          collection(db, "conversations"),
+          orderBy("lastMessageAt", "desc"),
+          limit(pageLim)
+        );
+
+        let out = [];
+        let last = null;
+        // Loop de páginas con getDocs (evita suscripción tiempo real costosa)
+        while (true) {
+          const qRef = last ? query(qBase, startAfter(last)) : qBase;
+          const snap = await getDocs(qRef);
+          if (snap.empty) break;
+
+          const rows = snap.docs.map((d) => ({ id: d.id, ...d.data(), contact: null }));
+          // filtro por asignación a mí y no eliminados
+          const mine = rows.filter(
+            (c) => !c.deletedAt && c.assignedToUid === user.uid
+          );
+          out.push(...mine);
+
+          last = snap.docs[snap.docs.length - 1];
+          if (snap.size < pageLim) break; // fin
+          // Protección por si hay muchísimos: corta a 10k
+          if (out.length > 10000) break;
+          if (cancelled) return;
+        }
+
+        // Cargar contactos en batches
+        const ids = out.map((r) => r.id);
+        let contactsById = {};
+        for (const ids10 of chunk(ids, 10)) {
+          const res = await getDocs(
+            query(collection(db, "contacts"), where(documentId(), "in", ids10))
+          );
+          res.forEach((docSnap) => {
+            contactsById[docSnap.id] = docSnap.data();
+          });
+          if (cancelled) return;
+        }
+
+        const withContacts = out.map((r) => ({
+          ...r,
+          contact: contactsById[r.id] || null,
+        }));
+
+        // Orden final por actividad (defensivo)
+        withContacts.sort((a, b) => {
+          const ta =
+            a.lastMessageAt?.toMillis?.() ??
+            (a.lastMessageAt ? +new Date(a.lastMessageAt) : 0);
+          const tb =
+            b.lastMessageAt?.toMillis?.() ??
+            (b.lastMessageAt ? +new Date(b.lastMessageAt) : 0);
+          return tb - ta;
+        });
+
+        if (!cancelled) setLabelsAll(withContacts);
+      } catch (err) {
+        console.error("labels loadAll error:", err);
+        if (!cancelled) setLabelsError("No se pudieron cargar todas las etiquetas.");
+      } finally {
+        if (!cancelled) setLabelsLoading(false);
+      }
+    }
+    loadAllForLabels();
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, user?.uid]);
+
+  // Array base para agrupar etiquetas (cuando estamos en etiquetas, usamos labelsAll sin paginar)
+  const baseForLabels = tab === "etiquetas"
+    ? labelsAll
+    : (user?.uid ? filtered.filter((c) => c.assignedToUid === user.uid) : []);
+
+  // Índice por etiqueta (clave normalizada), manteniendo nombre original
   const labelsIndex = useMemo(() => {
     const map = new Map(); // key: normSlug -> { display, items: [] }
-    for (const c of myForLabels) {
+    for (const c of baseForLabels) {
       const slugs =
         Array.isArray(c.labels) && c.labels.length ? c.labels : ["__none__"];
       for (const s of slugs) {
@@ -215,7 +382,7 @@ export default function ConversationsList({ activeId, onSelect }) {
       });
     }
     return map;
-  }, [myForLabels]);
+  }, [baseForLabels]);
 
   const sortedGroups = useMemo(() => {
     const entries = Array.from(labelsIndex.entries()).map(([key, val]) => ({
@@ -233,9 +400,7 @@ export default function ConversationsList({ activeId, onSelect }) {
     return entries;
   }, [labelsIndex]);
 
-  const canOpen = (c) =>
-    !c.assignedToUid || c.assignedToUid === user?.uid;
-
+  const canOpen = (c) => !c.assignedToUid || c.assignedToUid === user?.uid;
   const tryOpen = (c) => {
     if (canOpen(c)) onSelect?.(c.id);
   };
@@ -246,10 +411,27 @@ export default function ConversationsList({ activeId, onSelect }) {
   const selectedGroup =
     selectedKey === "__all__" ? null : labelsIndex.get(selectedKey);
 
+  // Handlers de paginado (solo afectan tabs != 'etiquetas')
+  const canPrev = pageIndex > 0;
+  const canNext = !!cursorsRef.current[pageIndex];
+
+  const goPrev = () => {
+    if (!canPrev) return;
+    setPageIndex((p) => Math.max(0, p - 1));
+  };
+  const goNext = () => {
+    if (!canNext) return;
+    setPageIndex((p) => p + 1);
+  };
+  useEffect(() => {
+    if (tab !== "etiquetas") setPageIndex(0);
+  }, [pageSize, tab]);
+
   return (
     <div className="flex flex-col min-h-0 h-full border-r bg-[#F6FBF7] border-[#CDEBD6]">
-      {/* Header: tabs + búsqueda (sticky en mobile) */}
-      <div className="sticky top-0 z-10 flex items-center gap-2 p-2 border-b bg-[#E8F5E9] border-[#CDEBD6]">
+      {/* Header superior: tabs + búsqueda + paginado (paginado oculto en 'etiquetas') */}
+      <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 p-2 border-b bg-[#E8F5E9] border-[#CDEBD6]">
+        {/* Tabs */}
         <div className="flex overflow-x-auto max-w-full border rounded bg-white/70 border-[#CDEBD6]">
           {[
             ["todos", "Todos"],
@@ -273,186 +455,255 @@ export default function ConversationsList({ activeId, onSelect }) {
           ))}
         </div>
 
+        {/* Búsqueda */}
         <input
           className="flex-1 input input-sm bg-white input-bordered border-[#CDEBD6] focus:border-[#2E7D32] focus:outline-none"
           placeholder="Buscar nombre o número…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
+
+        {/* Controles de paginado: se ocultan en 'etiquetas' */}
+        {tab !== "etiquetas" && (
+          <div className="flex gap-2 items-center ml-auto">
+            <label className="text-xs opacity-70">Por página</label>
+            <select
+              className="select select-bordered select-xs bg-white border-[#CDEBD6] focus:border-[#2E7D32]"
+              value={pageSize}
+              onChange={(e) => setPageSize(Number(e.target.value))}
+            >
+              <option value={10}>10</option>
+              <option value={25}>25</option>
+              <option value={50}>50</option>
+            </select>
+
+            <div className="join">
+              <button
+                className={"btn btn-xs join-item " + (!canPrev ? "btn-disabled" : "")}
+                onClick={goPrev}
+                disabled={!canPrev}
+                title="Anterior"
+              >
+                ◀
+              </button>
+              <button
+                className={"btn btn-xs join-item " + (!canNext ? "btn-disabled" : "")}
+                onClick={goNext}
+                disabled={!canNext}
+                title="Siguiente"
+              >
+                ▶
+              </button>
+            </div>
+            <span className="text-xs px-2 py-1 rounded bg-white/70 border border-[#CDEBD6]">
+              Página <b>{pageIndex + 1}</b>
+            </span>
+          </div>
+        )}
+
+        {/* Estado de carga para etiquetas */}
+        {tab === "etiquetas" && (
+          <div className="ml-auto text-xs">
+            {labelsLoading ? (
+              <span className="badge badge-outline">Cargando todas las etiquetas…</span>
+            ) : labelsError ? (
+              <span className="text-red-600">{labelsError}</span>
+            ) : (
+              <span className="badge badge-success">
+                Etiquetas cargadas ({labelsAll.length})
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Contenido scrollable */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="overflow-y-auto flex-1">
         {tab !== "etiquetas" ? (
           <>
-            {filtered.map((c) => {
-              const isActive = String(c.id) === String(activeId || "");
-              const slugs = Array.isArray(c.labels) ? c.labels : [];
-              const assignedToMe = user?.uid && c.assignedToUid === user?.uid;
-              const lockedByOther = !!c.assignedToUid && !assignedToMe;
-              const assigned =
-                c.assignedToName ||
-                (c.assignedToUid ? "Asignado" : "No asignado");
+            {loading && (
+              <>
+                <RowSkeleton />
+                <RowSkeleton />
+                <RowSkeleton />
+              </>
+            )}
+            {!loading &&
+              filtered.map((c) => {
+                const isActive = String(c.id) === String(activeId || "");
+                const slugs = Array.isArray(c.labels) ? c.labels : [];
+                const assignedToMe = user?.uid && c.assignedToUid === user?.uid;
+                const lockedByOther = !!c.assignedToUid && !assignedToMe;
+                const assigned =
+                  c.assignedToName ||
+                  (c.assignedToUid ? "Asignado" : "No asignado");
 
-              return (
-                <div
-                  key={c.id}
-                  className={
-                    "border-t px-3 py-3 transition-colors border-[#E3EFE7] " +
-                    (isActive ? "bg-[#E8F5E9] " : "bg-white hover:bg-[#F1FAF3] ") +
-                    (lockedByOther ? "opacity-60 cursor-not-allowed " : "")
-                  }
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => tryOpen(c)}
-                  onKeyDown={(e) => {
-                    if ((e.key === "Enter" || e.key === " ") && canOpen(c))
-                      onSelect?.(c.id);
-                  }}
-                  title={
-                    lockedByOther
-                      ? `Asignada a ${c.assignedToName || "otro agente"}`
-                      : c.id
-                  }
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="font-mono text-sm truncate">
-                        {c.contact?.name || c.id}
-                      </div>
-                      {c.lastMessageText && (
-                        <div className="text-xs text-gray-600 truncate mt-1">
-                          {c.lastMessageText}
+                return (
+                  <div
+                    key={c.id}
+                    className={
+                      "border-t px-3 py-3 transition-colors border-[#E3EFE7] " +
+                      (isActive ? "bg-[#E8F5E9] " : "bg-white hover:bg-[#F1FAF3] ") +
+                      (lockedByOther ? "opacity-60 cursor-not-allowed " : "")
+                    }
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => tryOpen(c)}
+                    onKeyDown={(e) => {
+                      if ((e.key === "Enter" || e.key === " ") && canOpen(c))
+                        onSelect?.(c.id);
+                    }}
+                    title={
+                      lockedByOther
+                        ? `Asignada a ${c.assignedToName || "otro agente"}`
+                        : c.id
+                    }
+                  >
+                    <div className="flex gap-3 justify-between items-center">
+                      <div className="min-w-0">
+                        <div className="font-mono text-sm truncate">
+                          {c.contact?.name || c.id}
                         </div>
-                      )}
-                      <div className="text-[11px] text-gray-500">
-                        {formatShort(c.lastMessageAt)}
+                        {c.lastMessageText && (
+                          <div className="mt-1 text-xs text-gray-600 truncate">
+                            {c.lastMessageText}
+                          </div>
+                        )}
+                        <div className="text-[11px] text-gray-500">
+                          {formatShort(c.lastMessageAt)}
+                        </div>
+                        <div className="mt-1">
+                          <LabelChips slugs={slugs} />
+                        </div>
                       </div>
-                      <div className="mt-1">
-                        <LabelChips slugs={slugs} />
-                      </div>
-                    </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
-                      {assignedToMe ? (
+                      <div className="flex gap-2 items-center shrink-0">
+                        {assignedToMe ? (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              unassign(c);
+                            }}
+                            className="border-0 btn btn-xs md:btn-sm"
+                            style={{
+                              backgroundColor: "var(--color-error, #ef4444)",
+                              color: "#fff",
+                            }}
+                            title="Desasignarme"
+                          >
+                            Yo ✓
+                          </button>
+                        ) : c.assignedToUid ? (
+                          <button
+                            className="cursor-not-allowed btn btn-xs md:btn-sm"
+                            style={{
+                              backgroundColor: "var(--color-error, #ef4444)",
+                              borderColor: "var(--color-error, #ef4444)",
+                              color: "#fff",
+                            }}
+                            disabled
+                            onClick={(e) => e.stopPropagation()}
+                            title={`Asignada a ${c.assignedToName || "otro agente"}`}
+                          >
+                            Ocupada
+                          </button>
+                        ) : (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              assignToMe(c);
+                            }}
+                            className="btn btn-xs md:btn-sm"
+                            style={{
+                              backgroundColor: "#2E7D32",
+                              borderColor: "#2E7D32",
+                              color: "#fff",
+                            }}
+                            title="Asignarme esta conversación"
+                          >
+                            Asignarme
+                          </button>
+                        )}
+
+                        {/* ☆/★: deshabilitado si lockedByOther */}
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            unassign(c);
+                            if (lockedByOther) return;
+                            toggleStar(c);
                           }}
-                          className="border-0 btn btn-xs md:btn-sm"
-                          style={{
-                            backgroundColor: "var(--color-error, #ef4444)",
-                            color: "#fff",
-                          }}
-                          title="Desasignarme"
+                          disabled={lockedByOther}
+                          className={
+                            "text-xl leading-none " +
+                            (lockedByOther
+                              ? "opacity-30 cursor-not-allowed"
+                              : isStarred(c)
+                              ? "text-yellow-500"
+                              : "text-gray-400 hover:text-gray-600")
+                          }
+                          title={
+                            lockedByOther
+                              ? `No podés marcar favoritos: asignada a ${c.assignedToName || "otro agente"}`
+                              : isStarred(c)
+                              ? "Quitar de favoritos"
+                              : "Agregar a favoritos"
+                          }
                         >
-                          Yo ✓
+                          {isStarred(c) ? "★" : "☆"}
                         </button>
-                      ) : c.assignedToUid ? (
+
+                        {/* 🗑️ Eliminar (soft delete) */}
                         <button
-                          className="cursor-not-allowed btn btn-xs md:btn-sm"
-                          style={{
-                            backgroundColor: "var(--color-error, #ef4444)",
-                            borderColor: "var(--color-error, #ef4444)",
-                            color: "#fff",
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            softDelete(c);
                           }}
-                          disabled
-                          onClick={(e) => e.stopPropagation()}
-                          title={`Asignada a ${c.assignedToName || "otro agente"}`}
+                          disabled={!canDelete(c)}
+                          className={
+                            "btn btn-xs md:btn-sm " +
+                            (!canDelete(c)
+                              ? "btn-disabled"
+                              : "border border-red-500 text-red-600 hover:bg-red-50")
+                          }
+                          title={
+                            canDelete(c)
+                              ? "Eliminar conversación (soft delete)"
+                              : "Solo puede eliminarla el agente asignado"
+                          }
                         >
-                          Ocupada
+                          🗑️
                         </button>
+                      </div>
+                    </div>
+
+                    <div className="mt-1 text-[11px] text-gray-600">
+                      {c.assignedToUid ? (
+                        <span>
+                          Asignado a{" "}
+                          <b>
+                            {c.assignedToUid === user?.uid
+                              ? "mí"
+                              : c.assignedToName || c.assignedToUid}
+                          </b>
+                        </span>
                       ) : (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            assignToMe(c);
-                          }}
-                          className="btn btn-xs md:btn-sm"
-                          style={{
-                            backgroundColor: "#2E7D32",
-                            borderColor: "#2E7D32",
-                            color: "#fff",
-                          }}
-                          title="Asignarme esta conversación"
-                        >
-                          Asignarme
-                        </button>
+                        <span className="italic text-gray-400">{
+                          c.assignedToName || (c.assignedToUid ? "Asignado" : "No asignado")
+                        }</span>
                       )}
-
-                      {/* ☆/★: deshabilitado si lockedByOther */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (lockedByOther) return;
-                          toggleStar(c);
-                        }}
-                        disabled={lockedByOther}
-                        className={
-                          "text-xl leading-none " +
-                          (lockedByOther
-                            ? "opacity-30 cursor-not-allowed"
-                            : isStarred(c)
-                            ? "text-yellow-500"
-                            : "text-gray-400 hover:text-gray-600")
-                        }
-                        title={
-                          lockedByOther
-                            ? `No podés marcar favoritos: asignada a ${c.assignedToName || "otro agente"}`
-                            : isStarred(c)
-                            ? "Quitar de favoritos"
-                            : "Agregar a favoritos"
-                        }
-                      >
-                        {isStarred(c) ? "★" : "☆"}
-                      </button>
-
-                      {/* 🗑️ Eliminar (soft delete) */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          softDelete(c);
-                        }}
-                        disabled={!canDelete(c)}
-                        className={
-                          "btn btn-xs md:btn-sm " +
-                          (!canDelete(c)
-                            ? "btn-disabled"
-                            : "border border-red-500 text-red-600 hover:bg-red-50")
-                        }
-                        title={
-                          canDelete(c)
-                            ? "Eliminar conversación (soft delete)"
-                            : "Solo puede eliminarla el agente asignado"
-                        }
-                      >
-                        🗑️
-                      </button>
                     </div>
                   </div>
-
-                  <div className="mt-1 text-[11px] text-gray-600">
-                    {c.assignedToUid ? (
-                      <span>
-                        Asignado a{" "}
-                        <b>
-                          {c.assignedToUid === user?.uid
-                            ? "mí"
-                            : c.assignedToName || c.assignedToUid}
-                        </b>
-                      </span>
-                    ) : (
-                      <span className="italic text-gray-400">{assigned}</span>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            {!loading && filtered.length === 0 && (
+              <div className="px-4 py-8 text-sm text-center text-gray-500">
+                No hay conversaciones para esta página / filtros.
+              </div>
+            )}
           </>
         ) : (
-          // ===== Vista por etiqueta (MIS etiquetas) — responsive fix =====
-          <div className="w-full overflow-x-hidden md:flex md:min-h-0">
+          // ===== Vista por etiqueta (TODAS, SIN paginar) =====
+          <div className="overflow-x-hidden w-full md:flex md:min-h-0">
             {/* Sidebar desktop */}
             <aside className="hidden md:block w-56 overflow-y-auto border-r shrink-0 border-[#CDEBD6]">
               <div className="p-2 border-b border-[#CDEBD6] bg-[#EAF7EE]">
@@ -485,7 +736,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                         }
                         title={isNone ? "Sin etiqueta" : display}
                       >
-                        <span className="flex items-center gap-2 truncate">
+                        <span className="flex gap-2 items-center truncate">
                           {isNone ? (
                             <span className="text-xs badge badge-neutral">
                               Sin etiqueta
@@ -499,7 +750,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                     </li>
                   );
                 })}
-                {sortedGroups.length === 0 && (
+                {sortedGroups.length === 0 && !labelsLoading && (
                   <li className="px-2 text-sm text-gray-500">
                     (No tenés conversaciones asignadas)
                   </li>
@@ -525,15 +776,21 @@ export default function ConversationsList({ activeId, onSelect }) {
             </div>
 
             {/* Contenido derecha */}
-            <section className="w-full min-w-0 overflow-y-auto md:flex-1">
-              {selectedKey === "__all__" ? (
+            <section className="overflow-y-auto w-full min-w-0 md:flex-1">
+              {labelsLoading ? (
+                <div className="p-3 space-y-2">
+                  <RowSkeleton />
+                  <RowSkeleton />
+                  <RowSkeleton />
+                </div>
+              ) : selectedKey === "__all__" ? (
                 <div className="divide-y">
                   {sortedGroups.map(({ key, display, items }) => {
                     const isNone = display === "__none__";
                     return (
                       <details key={key} className="group">
                         <summary className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-[#EAF7EE]">
-                          <div className="flex items-center gap-2">
+                          <div className="flex gap-2 items-center">
                             {isNone ? (
                               <span className="text-xs badge badge-neutral">
                                 Sin etiqueta
@@ -588,7 +845,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                                     : c.id
                                 }
                               >
-                                <div className="flex items-center justify-between gap-2">
+                                <div className="flex gap-2 justify-between items-center">
                                   <div className="min-w-0">
                                     <div className="font-mono text-sm truncate">
                                       {c.contact?.name || c.id}
@@ -600,7 +857,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                                       <LabelChips slugs={slugs} />
                                     </div>
                                   </div>
-                                  <div className="flex items-center gap-2 shrink-0">
+                                  <div className="flex gap-2 items-center shrink-0">
                                     {assignedToMe ? (
                                       <button
                                         onClick={(e) => {
@@ -707,7 +964,8 @@ export default function ConversationsList({ activeId, onSelect }) {
                                     </span>
                                   ) : (
                                     <span className="italic text-gray-400">
-                                      {assigned}
+                                      {c.assignedToName ||
+                                        (c.assignedToUid ? "Asignado" : "No asignado")}
                                     </span>
                                   )}
                                 </div>
@@ -726,8 +984,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                     const slugs = Array.isArray(c.labels) ? c.labels : [];
                     const assignedToMe =
                       user?.uid && c.assignedToUid === user?.uid;
-                    const lockedByOther =
-                      !!c.assignedToUid && !assignedToMe;
+                    const lockedByOther = !!c.assignedToUid && !assignedToMe;
                     const assigned =
                       c.assignedToName ||
                       (c.assignedToUid ? "Asignado" : "No asignado");
@@ -752,7 +1009,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                             : c.id
                         }
                       >
-                        <div className="flex items-center justify-between gap-2">
+                        <div className="flex gap-2 justify-between items-center">
                           <div className="min-w-0">
                             <div className="font-mono text-sm truncate">
                               {c.contact?.name || c.id}
@@ -764,7 +1021,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                               <LabelChips slugs={slugs} />
                             </div>
                           </div>
-                          <div className="flex items-center gap-2 shrink-0">
+                          <div className="flex gap-2 items-center shrink-0">
                             {assignedToMe ? (
                               <button
                                 onClick={(e) => {

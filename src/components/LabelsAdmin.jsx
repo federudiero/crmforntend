@@ -41,8 +41,8 @@ export default function LabelsAdmin() {
     <div className="space-y-4">
       <h2 className="text-xl font-bold">Etiquetas</h2>
 
-      <div className="flex items-center gap-2">
-        <input className="input input-bordered w-72" placeholder="Buscar…" value={q} onChange={(e)=>setQ(e.target.value)} />
+      <div className="flex gap-2 items-center">
+        <input className="w-72 input input-bordered" placeholder="Buscar…" value={q} onChange={(e)=>setQ(e.target.value)} />
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">
@@ -51,8 +51,8 @@ export default function LabelsAdmin() {
           <div className="card-body">
             <div className="divide-y">
               {filtered.map(l => (
-                <div key={l.id} className="flex items-center justify-between gap-3 py-3">
-                  <div className="flex items-center gap-3">
+                <div key={l.id} className="flex gap-3 justify-between items-center py-3">
+                  <div className="flex gap-3 items-center">
                     <div className={`badge badge-${l.color}`}>{l.name}</div>
                     <div className="text-xs opacity-60">/{l.slug}</div>
                   </div>
