@@ -163,10 +163,8 @@ export default function ChatWindow({ conversationId, onBack }) {
   // EMOJI PICKER
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
 
-
   // Modal imagen
-const [imagePreviewUrl, setImagePreviewUrl] = useState(null);
-
+  const [imagePreviewUrl, setImagePreviewUrl] = useState(null);
 
   // ---- refs ----
   const viewportRef = useRef(null);
@@ -175,6 +173,7 @@ const [imagePreviewUrl, setImagePreviewUrl] = useState(null);
   const audioInputRef = useRef(null);
   const attachBtnRef = useRef(null);
   const emojiPickerRef = useRef(null);
+  const emojiBtnRef = useRef(null); // <<<<<< NUEVO: ref del botón de emojis
 
   const didInitialAutoScroll = useRef(false);
 
@@ -301,74 +300,73 @@ const [imagePreviewUrl, setImagePreviewUrl] = useState(null);
   }, [canRead]);
 
   // mensajes
- // mensajes (escuchar ambas subcolecciones y mergear)
-useEffect(() => {
-  if (!conversationId || !canRead) {
-    setMsgs([]);
-    return;
-  }
+  // mensajes (escuchar ambas subcolecciones y mergear)
+  useEffect(() => {
+    if (!conversationId || !canRead) {
+      setMsgs([]);
+      return;
+    }
 
-  const colA = collection(db, "conversations", String(conversationId), "messages");
-  const colB = collection(db, "conversations", String(conversationId), "msgs");
+    const colA = collection(db, "conversations", String(conversationId), "messages");
+    const colB = collection(db, "conversations", String(conversationId), "msgs");
 
-  // Aplicar límite a las queries para optimizar la carga
-  const qA = query(colA, orderBy("timestamp", "desc"), limit(messageLimit));
-  const qB = query(colB, orderBy("timestamp", "desc"), limit(messageLimit));
+    // Aplicar límite a las queries para optimizar la carga
+    const qA = query(colA, orderBy("timestamp", "desc"), limit(messageLimit));
+    const qB = query(colB, orderBy("timestamp", "desc"), limit(messageLimit));
 
-  let a = [];
-  let b = [];
+    let a = [];
+    let b = [];
 
-  const applyMerge = () => {
-    // merge + dedupe por id
-    const map = new Map();
-    for (const m of a) map.set(m.id, m);
-    for (const m of b) map.set(m.id, m);
+    const applyMerge = () => {
+      // merge + dedupe por id
+      const map = new Map();
+      for (const m of a) map.set(m.id, m);
+      for (const m of b) map.set(m.id, m);
 
-    // ordenar por timestamp asc (tolerante a null) para mostrar cronológicamente
-    const arr = Array.from(map.values()).sort((m1, m2) => {
-      const t1 = m1?.timestamp?.toMillis?.() ?? (m1?.timestamp ? new Date(m1.timestamp).getTime() : 0);
-      const t2 = m2?.timestamp?.toMillis?.() ?? (m2?.timestamp ? new Date(m2.timestamp).getTime() : 0);
-      return t1 - t2;
-    });
+      // ordenar por timestamp asc (tolerante a null) para mostrar cronológicamente
+      const arr = Array.from(map.values()).sort((m1, m2) => {
+        const t1 = m1?.timestamp?.toMillis?.() ?? (m1?.timestamp ? new Date(m1.timestamp).getTime() : 0);
+        const t2 = m2?.timestamp?.toMillis?.() ?? (m2?.timestamp ? new Date(m2.timestamp).getTime() : 0);
+        return t1 - t2;
+      });
 
-    // Verificar si hay más mensajes disponibles
-    const totalMessages = a.length + b.length;
-    const uniqueMessages = arr.length;
-    setHasMoreMessages(uniqueMessages >= messageLimit && (a.length === messageLimit || b.length === messageLimit));
+      // Verificar si hay más mensajes disponibles
+      const totalMessages = a.length + b.length;
+      const uniqueMessages = arr.length;
+      setHasMoreMessages(uniqueMessages >= messageLimit && (a.length === messageLimit || b.length === messageLimit));
 
-    setMsgs(arr);
-  };
+      setMsgs(arr);
+    };
 
-  const unsubA = onSnapshot(
-    qA,
-    (snap) => {
-      a = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      applyMerge();
-    },
-    (err) => console.error("onSnapshot(messages) error:", err)
-  );
+    const unsubA = onSnapshot(
+      qA,
+      (snap) => {
+        a = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        applyMerge();
+      },
+      (err) => console.error("onSnapshot(messages) error:", err)
+    );
 
-  const unsubB = onSnapshot(
-    qB,
-    (snap) => {
-      b = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      applyMerge();
-    },
-    (err) => console.error("onSnapshot(msgs) error:", err)
-  );
+    const unsubB = onSnapshot(
+      qB,
+      (snap) => {
+        b = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        applyMerge();
+      },
+      (err) => console.error("onSnapshot(msgs) error:", err)
+    );
 
-  return () => {
-    unsubA?.();
-    unsubB?.();
-  };
-}, [conversationId, canRead, messageLimit]);
+    return () => {
+      unsubA?.();
+      unsubB?.();
+    };
+  }, [conversationId, canRead, messageLimit]);
 
-useEffect(() => {
-  const onEsc = (e) => e.key === "Escape" && setImagePreviewUrl(null);
-  document.addEventListener("keydown", onEsc);
-  return () => document.removeEventListener("keydown", onEsc);
-}, []);
-
+  useEffect(() => {
+    const onEsc = (e) => e.key === "Escape" && setImagePreviewUrl(null);
+    document.addEventListener("keydown", onEsc);
+    return () => document.removeEventListener("keydown", onEsc);
+  }, []);
 
   // auto-scroll
   const scrollToBottom = (behavior = "auto") => {
@@ -606,12 +604,14 @@ useEffect(() => {
     };
   }, [showAttachMenu]);
 
+  // <<<<<< MODIFICADO: cerrar emoji picker ignorando el botón del propio picker
   useEffect(() => {
     if (!showEmojiPicker) return;
     const onDocClick = (e) => {
       if (!emojiPickerRef.current) return;
-      if (!emojiPickerRef.current.contains(e.target))
-        setShowEmojiPicker(false);
+      const clickedInsidePanel = emojiPickerRef.current.contains(e.target);
+      const clickedOnButton = emojiBtnRef.current?.contains(e.target);
+      if (!clickedInsidePanel && !clickedOnButton) setShowEmojiPicker(false);
     };
     const onEsc = (e) => e.key === "Escape" && setShowEmojiPicker(false);
     document.addEventListener("click", onDocClick);
@@ -621,6 +621,7 @@ useEffect(() => {
       document.removeEventListener("keydown", onEsc);
     };
   }, [showEmojiPicker]);
+  // >>>>>>
 
   // ---------- render ----------
 
@@ -846,17 +847,17 @@ useEffect(() => {
                         {effectiveType === "image" && mediaUrl ? (
                           <>
                             <img
-  src={mediaUrl}
-  alt="Imagen"
-  className="object-cover w-44 h-44 rounded-lg md:w-52 md:h-52 cursor-zoom-in"
-  loading="lazy"
-  onClick={() => setImagePreviewUrl(mediaUrl)}    
-  onError={(e) => {
-    e.currentTarget.style.display = "none";
-    const fallback = e.currentTarget.nextSibling;
-    if (fallback) fallback.style.display = "block";
-  }}
-/>
+                              src={mediaUrl}
+                              alt="Imagen"
+                              className="object-cover w-44 h-44 rounded-lg md:w-52 md:h-52 cursor-zoom-in"
+                              loading="lazy"
+                              onClick={() => setImagePreviewUrl(mediaUrl)}
+                              onError={(e) => {
+                                e.currentTarget.style.display = "none";
+                                const fallback = e.currentTarget.nextSibling;
+                                if (fallback) fallback.style.display = "block";
+                              }}
+                            />
                             {/* Fallback visible */}
                             <div style={{ display: "none" }}>
                               <div
@@ -1161,9 +1162,10 @@ useEffect(() => {
               {/* EMOJI */}
               <div className="relative">
                 <button
+                  ref={emojiBtnRef}
                   className="btn btn-square btn-sm border border-[#CDEBD6] bg-white text-black hover:bg-[#F1FAF3]"
                   disabled={!canWrite}
-                  onClick={() => setShowEmojiPicker((v) => !v)}
+                  onClick={(e) => { e.stopPropagation(); setShowEmojiPicker((v) => !v); }} // <<<<<< evita cierre inmediato
                   title="Insertar emoji"
                 >
                   <Smile className="w-4 h-4" />
@@ -1172,121 +1174,17 @@ useEffect(() => {
                 {showEmojiPicker && (
                   <div
                     ref={emojiPickerRef}
-                    className="absolute bottom-[110%] right-0 z-50 rounded-xl border border-[#CDEBD6] bg-white shadow-lg p-3 w-64 max-h-48 overflow-y-auto"
+                    className="absolute bottom-[110%] right-0 z-[95] rounded-xl border border-[#CDEBD6] bg-white shadow-lg p-3 w-64 max-h-48 overflow-y-auto"
                   >
                     <div className="grid grid-cols-8 gap-1">
                       {[
-                        "😀",
-                        "😃",
-                        "😄",
-                        "😁",
-                        "😆",
-                        "😅",
-                        "😂",
-                        "🤣",
-                        "😊",
-                        "😇",
-                        "🙂",
-                        "🙃",
-                        "😉",
-                        "😌",
-                        "😍",
-                        "🥰",
-                        "😘",
-                        "😗",
-                        "😙",
-                        "😚",
-                        "😋",
-                        "😛",
-                        "😝",
-                        "😜",
-                        "🤪",
-                        "🤨",
-                        "🧐",
-                        "🤓",
-                        "😎",
-                        "🤩",
-                        "🥳",
-                        "😏",
-                        "😒",
-                        "😞",
-                        "😔",
-                        "😟",
-                        "😕",
-                        "🙁",
-                        "☹️",
-                        "😣",
-                        "😖",
-                        "😫",
-                        "😩",
-                        "🥺",
-                        "😢",
-                        "😭",
-                        "😤",
-                        "😠",
-                        "😡",
-                        "🤬",
-                        "🤯",
-                        "😳",
-                        "🥵",
-                        "🥶",
-                        "😱",
-                        "😨",
-                        "😰",
-                        "😥",
-                        "😓",
-                        "🤗",
-                        "🤔",
-                        "🤭",
-                        "🤫",
-                        "🤥",
-                        "😶",
-                        "😐",
-                        "😑",
-                        "😬",
-                        "🙄",
-                        "😯",
-                        "😦",
-                        "😧",
-                        "😮",
-                        "😲",
-                        "🥱",
-                        "😴",
-                        "🤤",
-                        "😪",
-                        "😵",
-                        "🤐",
-                        "🥴",
-                        "🤢",
-                        "🤮",
-                        "🤧",
-                        "😷",
-                        "🤒",
-                        "🤕",
-                        "🤑",
-                        "🤠",
-                        "😈",
-                        "👿",
-                        "👹",
-                        "👺",
-                        "🤡",
-                        "💩",
-                        "👻",
-                        "💀",
-                        "☠️",
-                        "👽",
-                        "👾",
-                        "🤖",
-                        "🎃",
-                        "😺",
-                        "😸",
-                        "😹",
-                        "😻",
-                        "😼",
-                        "😽",
-                        "🙀",
-                        "😿",
-                        "😾",
+                        "😀","😃","😄","😁","😆","😅","😂","🤣","😊","😇","🙂","🙃","😉","😌","😍","🥰",
+                        "😘","😗","😙","😚","😋","😛","😝","😜","🤪","🤨","🧐","🤓","😎","🤩","🥳","😏",
+                        "😒","😞","😔","😟","😕","🙁","☹️","😣","😖","😫","😩","🥺","😢","😭","😤","😠",
+                        "😡","🤬","🤯","😳","🥵","🥶","😱","😨","😰","😥","😓","🤗","🤔","🤭","🤫","🤥",
+                        "😶","😐","😑","😬","🙄","😯","😦","😧","😮","😲","🥱","😴","🤤","😪","😵","🤐",
+                        "🥴","🤢","🤮","🤧","😷","🤒","🤕","🤑","🤠","😈","👿","👹","👺","🤡","💩","👻",
+                        "💀","☠️","👽","👾","🤖","🎃","😺","😸","😹","😻","😼","😽","🙀","😿","😾",
                       ].map((emoji) => (
                         <button
                           key={emoji}
@@ -1323,7 +1221,7 @@ useEffect(() => {
 
       {/* Drawer de perfil */}
       {showProfile && (
-        <div className="fixed inset-y-0 right-0 z-[80] w-full max-w-md border-l border-[#CDEBD6] bg-base-100 shadow-xl">
+        <div className="fixed inset-y-0 right-0 z-[80] w/full max-w-md border-l border-[#CDEBD6] bg-base-100 shadow-xl">
           <div className="flex items-center justify-between border-b border-[#CDEBD6] p-3">
             <h3 className="font-semibold">Perfil de cliente</h3>
             <button
@@ -1343,36 +1241,32 @@ useEffect(() => {
         </div>
       )}
 
-
       {imagePreviewUrl && (
-  <div
-    className="fixed inset-0 z-[95] bg-black/70 grid place-items-center p-4"
-    onClick={() => setImagePreviewUrl(null)}  // click en backdrop cierra
-  >
-    <div
-      className="relative bg-white rounded-xl p-2 shadow-2xl max-w-[92vw]"
-      onClick={(e) => e.stopPropagation()}     // evita cerrar si clickeás dentro
-    >
-      <button
-        className="absolute top-2 right-2 btn btn-ghost btn-sm"
-        onClick={() => setImagePreviewUrl(null)}
-        title="Cerrar"
-      >
-        ✕
-      </button>
+        <div
+          className="fixed inset-0 z-[95] bg-black/70 grid place-items-center p-4"
+          onClick={() => setImagePreviewUrl(null)}  // click en backdrop cierra
+        >
+          <div
+            className="relative bg-white rounded-xl p-2 shadow-2xl max-w-[92vw]"
+            onClick={(e) => e.stopPropagation()}     // evita cerrar si clickeás dentro
+          >
+            <button
+              className="absolute top-2 right-2 btn btn-ghost btn-sm"
+              onClick={() => setImagePreviewUrl(null)}
+              title="Cerrar"
+            >
+              ✕
+            </button>
 
-      <img
-        src={imagePreviewUrl}
-        alt="Vista previa"
-        className="max-h-[80vh] max-w-[90vw] object-contain rounded-lg"
-        loading="eager"
-      />
-    </div>
-  </div>
-)}
-
-
-      
+            <img
+              src={imagePreviewUrl}
+              alt="Vista previa"
+              className="max-h-[80vh] max-w-[90vw] object-contain rounded-lg"
+              loading="eager"
+            />
+          </div>
+        </div>
+      )}
 
       {/* Modal de etiquetas */}
       {showTags && (
@@ -1404,10 +1298,6 @@ useEffect(() => {
           </div>
         </div>
       )}
-
-
-     
-
     </div>
   );
 }
