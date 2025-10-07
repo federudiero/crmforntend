@@ -43,6 +43,7 @@ import {
   Trash2,  // << añadidos
   Check,   // << añadidos
   X,       // << añadidos
+  CornerUpLeft,
 } from "lucide-react";
 
 // === DEBUG WhatsApp ===
@@ -331,6 +332,9 @@ export default function ChatWindow({ conversationId, onBack }) {
   const [editingMessageId, setEditingMessageId] = useState(null);
   const [editingText, setEditingText] = useState("");
 
+  // --- reply state ---
+  const [replyTo, setReplyTo] = useState(null); // { id, type, textPreview, mediaUrl, isOut }
+
   // ---- refs ----
   const viewportRef = useRef(null);
   const textareaRef = useRef(null);
@@ -349,6 +353,7 @@ export default function ChatWindow({ conversationId, onBack }) {
     setContact(null);
     setConvMeta(null);
     setText("");
+    setReplyTo(null);
     setTab("chat");
     setShowAttachMenu(false);
     setShowEmojiPicker(false);
@@ -543,6 +548,26 @@ export default function ChatWindow({ conversationId, onBack }) {
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight + 9999, behavior });
   };
+
+  // ====== Reply helpers ======
+  const beginReplyTo = (m) => {
+    try {
+      const isOut = isOutgoingMessage(m, user);
+      const mediaUrl = resolveMediaUrl(m);
+      const type = m?.media?.kind || m?.mediaKind || m?.type || (m?.image ? "image" : m?.audio ? "audio" : "text");
+      const visibleText = getVisibleText(m);
+      setReplyTo({
+        id: m.id,
+        type,
+        textPreview: (visibleText || (type === "image" ? "Imagen" : type === "audio" ? "Audio" : "")) || "",
+        mediaUrl: mediaUrl || null,
+        isOut,
+      });
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    } catch { /* noop */ }
+  };
+
+  const cancelReplyTo = () => setReplyTo(null);
 
   useEffect(() => {
     if (tab !== "chat") return;
@@ -764,6 +789,7 @@ export default function ChatWindow({ conversationId, onBack }) {
             text: body,
             conversationId,
             sellerName,
+            ...(replyTo ? { replyTo: { id: replyTo.id, type: replyTo.type, text: replyTo.textPreview } } : {}),
           });
           const serverConvId = textResult?.results?.[0]?.to;
           if (serverConvId && serverConvId !== conversationId) {
@@ -786,7 +812,8 @@ export default function ChatWindow({ conversationId, onBack }) {
           to: String(conversationId),
           conversationId,
           sellerName,
-          image: { link: url }
+          image: { link: url },
+          ...(replyTo ? { replyTo: { id: replyTo.id, type: replyTo.type, text: replyTo.textPreview } } : {}),
         });
         if (res && res.ok === false) {
           const err = res?.results?.[0]?.error;
@@ -807,7 +834,8 @@ export default function ChatWindow({ conversationId, onBack }) {
           to: String(conversationId),
           conversationId,
           sellerName,
-          audio: { link: url }
+          audio: { link: url },
+          ...(replyTo ? { replyTo: { id: replyTo.id, type: replyTo.type, text: replyTo.textPreview } } : {}),
         });
         if (res && res.ok === false) {
           const err = res?.results?.[0]?.error;
@@ -825,6 +853,7 @@ export default function ChatWindow({ conversationId, onBack }) {
     } finally {
       setSending(false);
       setShowAttachMenu(false);
+      setReplyTo(null);
     }
   };
 
@@ -837,18 +866,20 @@ export default function ChatWindow({ conversationId, onBack }) {
       const { url } = await uploadFile(file, dest);
       const payload =
         kind === "image" ? { image: { link: url } } : { audio: { link: url } };
-     await sendMessage({
-  to: String(conversationId),
-  conversationId,
-  sellerName: emailHandle(user?.email || user?.displayName || "Equipo de Ventas"),
-  ...payload,
-});
+      await sendMessage({
+        to: String(conversationId),
+        conversationId,
+        sellerName: emailHandle(user?.email || user?.displayName || "Equipo de Ventas"),
+        ...payload,
+        ...(replyTo ? { replyTo: { id: replyTo.id, type: replyTo.type, text: replyTo.textPreview } } : {}),
+      });
       scrollToBottom("smooth");
     } catch (err) {
       alert(err?.message || `No se pudo enviar el ${kind}`);
     } finally {
       setSending(false);
       setShowAttachMenu(false);
+      setReplyTo(null);
     }
   };
 
@@ -1131,6 +1162,15 @@ export default function ChatWindow({ conversationId, onBack }) {
                       </div>
 
                       <div className={`px-4 py-3 ${bubbleClass}`}>
+                        {/* Quote (reply) block */}
+                        {m.replyTo && (
+                          <div className={`mb-2 border-l-4 pl-3 ${isOut ? "border-white/50" : "border-[#CDEBD6]"}`}>
+                            <div className={`text-[11px] ${isOut ? "text-white/70" : "text-gray-500"}`}>En respuesta a</div>
+                            <div className={`text-sm ${isOut ? "text-white" : "text-gray-800"}`}>
+                              {m.replyTo?.text || m.replyTo?.snippet || (m.replyTo?.type === "image" ? "Imagen" : m.replyTo?.type === "audio" ? "Audio" : "Mensaje")}
+                            </div>
+                          </div>
+                        )}
                         {/* PREVIEW FIX — Render */}
                         {effectiveType === "image" && mediaUrl ? (
                           <>
@@ -1312,6 +1352,15 @@ export default function ChatWindow({ conversationId, onBack }) {
                                 texto={visibleText}
                               />
                             )}
+                            {canWrite && (
+                              <button
+                                className={`btn btn-ghost btn-xs ${isOut ? "text-white/90" : "text-gray-700"}`}
+                                title="Responder"
+                                onClick={() => beginReplyTo(m)}
+                              >
+                                <CornerUpLeft className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                             {isOut && canWrite && (
                               <>
                                 <button
@@ -1480,6 +1529,20 @@ export default function ChatWindow({ conversationId, onBack }) {
               </div>
 
               {/* Textarea */}
+              {/* Reply chip over input */}
+              {replyTo && (
+                <div className="absolute -top-9 left-0 right-0 flex items-center justify-between px-3 py-1 rounded-md border bg-white border-[#CDEBD6] text-sm">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <CornerUpLeft className="w-4 h-4 text-[#2E7D32]" />
+                    <span className="truncate">
+                      {(replyTo.textPreview || (replyTo.type === "image" ? "Imagen" : replyTo.type === "audio" ? "Audio" : "Mensaje"))}
+                    </span>
+                  </div>
+                  <button className="btn btn-ghost btn-xs" onClick={cancelReplyTo} title="Cancelar respuesta">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
               <textarea
                 ref={textareaRef}
                 rows={1}

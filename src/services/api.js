@@ -8,12 +8,13 @@ const BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/$/, "");
  *  - audio: { link }            ó { id }
  *  - template: { name, ... }
  */
-export async function sendMessage({ to, text, image, audio, template, conversationId }) {
+export async function sendMessage({ to, text, image, audio, template, conversationId, replyTo }) {
   const payload = { to, conversationId };
   if (text) payload.text = text;
   if (image) payload.image = image;
   if (audio) payload.audio = audio;
   if (template) payload.template = template;
+  if (replyTo) payload.replyTo = replyTo;
 
   const r = await fetch(`${BASE}/api/sendMessage`, {
     method: "POST",
