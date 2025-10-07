@@ -1,5 +1,6 @@
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { useAuthState } from "../hooks/useAuthState.js";
+import NotificationsSetup from "./NotificationsSetup.jsx";
 
 export default function RequireAuth() {
   const { user, loading } = useAuthState();
@@ -8,5 +9,10 @@ export default function RequireAuth() {
   if (loading) return null; // o un spinner
   if (!user) return <Navigate to="/" replace state={{ from: loc }} />;
 
-  return <Outlet />;
+  return (
+    <>
+      <NotificationsSetup />
+      <Outlet />
+    </>
+  );
 }

@@ -2,16 +2,41 @@
 <html lang="es" data-theme="crm">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/jpeg" href="/icono.jpg" />
-    <link rel="apple-touch-icon" href="/icono.jpg" />
-    <link rel="shortcut icon" type="image/jpeg" href="/icono.jpg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!-- Colores / meta -->
     <meta name="theme-color" content="#1f2937" />
-    <meta name="description" content="CRM WhatsApp - Sistema de gestión de conversaciones" />
-    <title>CRM WhatsApp</title>
+    <meta name="description" content="CRM Hogarcril - Sistema de gestión de conversaciones" />
+
+    <!-- Manifest PWA -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <!-- Iconos -->
+    <link rel="icon" type="image/jpeg" href="/icono.jpg" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <link rel="shortcut icon" type="image/jpeg" href="/icono.jpg" />
+
+    <!-- iOS standalone (opcional pero recomendado) -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+    <title>CRM Hogarcril</title>
   </head>
   <body>
     <div id="root"></div>
+
+    <!-- Tu app (no toco tu lógica) -->
     <script type="module" src="/src/main.jsx"></script>
+
+    <!-- Registro del Service Worker -->
+    <script>
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker
+            .register("/sw.js", { scope: "/" })
+            .catch((err) => console.error("SW registration failed:", err));
+        });
+      }
+    </script>
   </body>
 </html>

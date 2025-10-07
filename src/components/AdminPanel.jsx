@@ -1,13 +1,13 @@
 // src/components/AdminPanel.jsx
 import { useEffect, useMemo, useState } from "react";
 import { db } from "../firebase";
-import { collection, getDocs, doc, getDoc } from "firebase/firestore";
+import { collection, getDocs, doc, getDoc, onSnapshot } from "firebase/firestore";
+
 import AdminVendors from "./AdminVendors.jsx";
 import LabelsAdmin from "./LabelsAdmin.jsx";
 import TemplatesPanel from "./TemplatesPanel.jsx";
-
 import TasksPanel from "./TasksPanel.jsx";
-import DashboardPro from "./DashboardPro.jsx";
+import VendorDetailPanel from "./VendorDetailPanel.jsx";
 
 /* ========================= Helpers fecha ========================= */
 function startOfDay(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; }
@@ -94,25 +94,41 @@ function ListStatCard({ title, data, accent = "#3b82f6", exportBtn, formatter = 
   );
 }
 
+/* ======== Presencia helper (estricto: flag + lastSeen fresco) ======== */
+function calcOnline(userDoc) {
+  if (!userDoc) return false;
+  const flag =
+    userDoc.online === true ||
+    userDoc.isOnline === true ||
+    userDoc.onlineStatus === "online";
+  const ms = tsToMs(userDoc.lastSeen);
+  const fresh = ms && (Date.now() - ms) < 2 * 60 * 1000; // 2 minutos
+  return !!(flag && fresh);
+}
+
 /* =============================================================== */
 export default function AdminPanel() {
-  // tabs soportados:
-  // "numbers" | "dashboard" | "templates" | "labels" | "campaigns" | "tasks" | "dashboardPro"
-  const [tab, setTab] = useState("numbers");
+  // Pestañas
+  const [tab, setTab] = useState("dashboard");
+  const [selectedVendorUid, setSelectedVendorUid] = useState(null);
 
+  // Estado
   const [loading, setLoading] = useState(false);
   const [convs, setConvs] = useState([]);
   const [vendors, setVendors] = useState([]);
 
+  // mapa de users para presencia
+  const [usersByUid, setUsersByUid] = useState({});
+
+  // Filtros globales (sin agente)
   const [mode, setMode] = useState("7");
   const [from, setFrom] = useState(ymd(startOfDay(new Date(Date.now() - 6 * 86400000))));
   const [to, setTo] = useState(ymd(new Date()));
-
   const [zoneFilter, setZoneFilter] = useState("(todas)");
   const [labelFilter, setLabelFilter] = useState([]);
-  const [agentFilter, setAgentFilter] = useState([]);
   const [q, setQ] = useState("");
 
+  // Zonas dinámicas (desde vendors activos)
   const zonas = useMemo(() => {
     const set = new Set(
       vendors.filter(v => v.active)
@@ -122,12 +138,15 @@ export default function AdminPanel() {
     return ["(todas)", ...Array.from(set).sort()];
   }, [vendors]);
 
-  // Carga para tu dashboard actual (cuando se entra a "dashboard")
+  // Carga datasets del dashboard + escucha users para presencia
   useEffect(() => {
     if (tab !== "dashboard") return;
+    setLoading(true);
+
+    let unsubUsers = null;
     (async () => {
-      setLoading(true);
       try {
+        // Conversaciones
         const cs = await getDocs(collection(db, "conversations"));
         const convRows = await Promise.all(
           cs.docs.map(async (d) => {
@@ -135,20 +154,31 @@ export default function AdminPanel() {
             try {
               const c = await getDoc(doc(db, "contacts", d.id));
               contact = c.exists() ? c.data() : null;
-            } catch (e) { console.error(e); }
+            } catch {}
             return { id: d.id, ...d.data(), contact };
           })
         );
         setConvs(convRows);
 
+        // Vendedores (wabaNumbers)
         const vs = await getDocs(collection(db, "wabaNumbers"));
         setVendors(vs.docs.map(d => ({ id: d.id, ...d.data() })));
+
+        // Users: presencia en tiempo real
+        unsubUsers = onSnapshot(collection(db, "users"), (snap) => {
+          const map = {};
+          snap.forEach((doc) => { map[doc.id] = doc.data(); });
+          setUsersByUid(map);
+        });
       } finally {
         setLoading(false);
       }
     })();
+
+    return () => { try { unsubUsers && unsubUsers(); } catch {} };
   }, [tab]);
 
+  // Períodos rápidos
   useEffect(() => {
     if (mode === "7") {
       const end = new Date();
@@ -166,10 +196,8 @@ export default function AdminPanel() {
     }
   }, [mode]);
 
-  // Rango en ms
-  const range = useMemo(() => {
-    return [+startOfDay(new Date(from)), +endOfDay(new Date(to))];
-  }, [from, to]);
+  // Derivados
+  const range = useMemo(() => [+startOfDay(new Date(from)), +endOfDay(new Date(to))], [from, to]);
 
   const convsInRange = useMemo(() => {
     const [a, b] = range;
@@ -179,6 +207,7 @@ export default function AdminPanel() {
     });
   }, [convs, range]);
 
+  // Índice zona → vendedores (para filtrar por zona)
   const vendorIndexByZone = useMemo(() => {
     const map = new Map();
     for (const v of vendors) {
@@ -216,18 +245,6 @@ export default function AdminPanel() {
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [convsByZone]);
 
-  const availableAgents = useMemo(() => {
-    const map = new Map();
-    for (const c of convsByZone) {
-      const name = c.assignedToName || "";
-      const uid = c.assignedToUid || "";
-      if (!name && !uid) continue;
-      const label = name && uid ? `${name} (${uid})` : (name || uid);
-      map.set(label, { name, uid });
-    }
-    return Array.from(map.keys()).sort((a, b) => a.localeCompare(b));
-  }, [convsByZone]);
-
   const convsByLabel = useMemo(() => {
     if (!labelFilter.length) return convsByZone;
     const set = new Set(labelFilter);
@@ -237,26 +254,18 @@ export default function AdminPanel() {
     });
   }, [convsByZone, labelFilter]);
 
-  const convsByAgent = useMemo(() => {
-    if (!agentFilter.length) return convsByLabel;
-    const tokens = agentFilter.map(s => s.trim());
-    return convsByLabel.filter(c => {
-      const name = (c.assignedToName || "").trim();
-      const uid = (c.assignedToUid || "").trim();
-      return tokens.some(t => t === name || t === uid || t === `${name} (${uid})`);
-    });
-  }, [convsByLabel, agentFilter]);
-
+  // Vista total: sin filtro de agente
   const convsFiltered = useMemo(() => {
     const s = q.trim().toLowerCase();
-    if (!s) return convsByAgent;
-    return convsByAgent.filter(c => {
+    if (!s) return convsByLabel;
+    return convsByLabel.filter(c => {
       const id = String(c.id || "").toLowerCase();
       const name = String(c.contact?.name || "").toLowerCase();
       return id.includes(s) || name.includes(s);
     });
-  }, [convsByAgent, q]);
+  }, [convsByLabel, q]);
 
+  // KPIs globales
   const kpis = useMemo(() => {
     const total = convsFiltered.length;
     const sinAsignar = convsFiltered.filter(c => !c.assignedToUid && !c.assignedToName).length;
@@ -276,6 +285,7 @@ export default function AdminPanel() {
     return { total, sinAsignar, porEtiqueta, porAgente };
   }, [convsFiltered]);
 
+  // Series y tops
   const seriePorDia = useMemo(() => {
     const map = new Map();
     const [a, b] = range;
@@ -288,14 +298,17 @@ export default function AdminPanel() {
     return Array.from(map.entries()).map(([k, v]) => ({ k, v }));
   }, [convsFiltered, range]);
 
-  const etiquetasData = useMemo(() =>
-    Object.entries(kpis.porEtiqueta).sort((a, b) => b[1] - a[1]).slice(0, 50).map(([k, v]) => ({ k, v }))
-    , [kpis.porEtiqueta]);
+  const etiquetasData = useMemo(
+    () => Object.entries(kpis.porEtiqueta).sort((a, b) => b[1] - a[1]).slice(0, 50).map(([k, v]) => ({ k, v })),
+    [kpis.porEtiqueta]
+  );
 
-  const agentesData = useMemo(() =>
-    Object.entries(kpis.porAgente).sort((a, b) => b[1] - a[1]).slice(0, 50).map(([k, v]) => ({ k, v }))
-    , [kpis.porAgente]);
+  const agentesData = useMemo(
+    () => Object.entries(kpis.porAgente).sort((a, b) => b[1] - a[1]).slice(0, 50).map(([k, v]) => ({ k, v })),
+    [kpis.porAgente]
+  );
 
+  // Vendedores activos / por zona
   const vendedoresActivos = useMemo(() => vendors.filter(v => !!v.active), [vendors]);
   const vendedoresPorZona = useMemo(() => {
     const map = {};
@@ -318,11 +331,8 @@ export default function AdminPanel() {
       : (vendedoresPorZona[zoneFilter]?.length || 0);
   }, [zoneFilter, vendedoresActivos.length, vendedoresPorZona]);
 
-  const zonaPart = zoneFilter === "(todas)" ? "" : `_zona_${zoneFilter}`;
-  const labelsPart = labelFilter.length ? `_labels_${labelFilter.join("+")}` : "";
-  const agentsPart = agentFilter.length ? `_agentes_${agentFilter.length}` : "";
-  const suffix = `${from}_a_${to}${zonaPart}${labelsPart}${agentsPart}`;
-
+  // Exports
+  const suffix = `${from}_a_${to}`;
   const doExportPorDia = () => {
     const csv = toCSV(seriePorDia.map(d => [d.k, d.v]), ["fecha", "conversaciones"]);
     downloadCSV(`conversaciones_por_dia_${suffix}.csv`, csv);
@@ -336,23 +346,12 @@ export default function AdminPanel() {
     downloadCSV(`conversaciones_por_agente_${suffix}.csv`, csv);
   };
 
-  const onMultiChange = (setter) => (e) => {
-    const vals = Array.from(e.target.selectedOptions).map(o => o.value);
-    setter(vals);
-  };
-  const clearFilters = () => {
-    setZoneFilter("(todas)");
-    setLabelFilter([]);
-    setAgentFilter([]);
-    setQ("");
-  };
-
   // ────────────────────────────────────────────────────────────
   // UI
   return (
     <div className="min-h-screen bg-gradient-to-br via-blue-50 to-indigo-100 from-slate-50">
       <div className="p-6 mx-auto space-y-8 max-w-7xl">
-        {/* Header elegante */}
+        {/* Header */}
         <div className="space-y-4 text-center">
           <h1 className="text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r via-blue-900 to-indigo-900 from-slate-900">
             Panel de Administración
@@ -360,7 +359,60 @@ export default function AdminPanel() {
           <p className="text-lg text-slate-600">Gestiona tu CRM con herramientas avanzadas</p>
         </div>
 
-        {/* Navegación por pestañas moderna */}
+        <section className="p-6 rounded-2xl border shadow-lg backdrop-blur-sm bg-white/90 border-white/20">
+          <h3 className="mb-4 text-xl font-bold text-slate-800">🌍 Vendedores activos por zona</h3>
+          <div className="grid gap-4 md:grid-cols-2">
+            {Object.entries(vendedoresPorZonaFiltrado).map(([zona, arr]) => (
+              <div key={zona} className="p-4 bg-gradient-to-br rounded-xl border shadow-sm from-slate-50 to-slate-100 border-slate-200/60">
+                <div className="flex justify-between items-center mb-3">
+                  <div className="font-semibold text-slate-800">{zona}</div>
+                  <div className="px-2 py-1 text-sm rounded-full text-slate-600 bg-slate-200">
+                    {arr.length} vendedor(es)
+                  </div>
+                </div>
+                <ul className="space-y-2">
+                  {arr.map((v) => {
+                    const uid = v.ownerUid || v.userUid || v.uid || v.id;
+                    const u = usersByUid[uid];
+                    const online = calcOnline(u);
+                    return (
+                      <li
+                        key={v.id}
+                        className="flex flex-wrap gap-2 justify-between items-center p-2 rounded-lg border bg-white/60 border-slate-200/40"
+                      >
+                        <span className="text-sm font-medium text-slate-700">
+                          {v.alias || v.owner || v.phone}
+                          {v.phone ? ` · ${v.phone}` : ""}
+                        </span>
+
+                        <span
+                          className={`px-2 py-1 text-xs rounded-full ${
+                            online ? "text-green-700 bg-green-100" : "text-red-600 bg-red-100"
+                          }`}
+                          title={u?.lastSeen ? `Visto: ${new Date(tsToMs(u.lastSeen)).toLocaleString()}` : undefined}
+                        >
+                          {online ? "Online" : "Offline"}
+                        </span>
+
+                        <button
+                          className="px-3 py-1 text-sm bg-white rounded-lg border shadow hover:bg-slate-50"
+                          onClick={() => {
+                            setSelectedVendorUid(uid);
+                            setTab("vendorDetail");
+                          }}
+                        >
+                          Ver detalle →
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* Tabs (sin Dashboard Pro) */}
         <div className="p-2 rounded-2xl border shadow-lg backdrop-blur-sm bg-white/80 border-white/20">
           <div className="flex flex-wrap gap-1">
             {[
@@ -368,9 +420,7 @@ export default function AdminPanel() {
               { key: "dashboard", label: "📊 Dashboard" },
               { key: "templates", label: "📝 Plantillas" },
               { key: "labels", label: "🏷️ Etiquetas" },
-
               { key: "tasks", label: "✅ Tareas" },
-              { key: "dashboardPro", label: "⚡ Dashboard Pro" }
             ].map(({ key, label }) => (
               <button
                 key={key}
@@ -405,7 +455,7 @@ export default function AdminPanel() {
 
             {!loading && (
               <>
-                {/* Controles / Filtros */}
+                {/* Controles / Filtros (globales, sin agente) */}
                 <div className="p-6 rounded-2xl border shadow-lg backdrop-blur-sm bg-white/90 border-white/20">
                   <div className="flex flex-wrap gap-4 items-end">
                     <div className="space-y-2">
@@ -469,7 +519,7 @@ export default function AdminPanel() {
 
                     <button
                       className="px-6 py-2 text-white bg-gradient-to-r rounded-xl shadow-lg transition-all duration-300 transform from-slate-500 to-slate-600 hover:from-slate-600 hover:to-slate-700 hover:scale-105"
-                      onClick={() => { setZoneFilter("(todas)"); setLabelFilter([]); setAgentFilter([]); setQ(""); }}
+                      onClick={() => { setZoneFilter("(todas)"); setLabelFilter([]); setQ(""); }}
                     >
                       Limpiar filtros
                     </button>
@@ -479,7 +529,7 @@ export default function AdminPanel() {
                     </div>
                   </div>
 
-                  {/* Filtros avanzados */}
+                  {/* Filtro de etiquetas */}
                   <div className="grid grid-cols-1 gap-4 mt-6 md:grid-cols-2">
                     <div className="space-y-2">
                       <label className="text-sm font-semibold text-slate-700">Etiquetas</label>
@@ -503,26 +553,12 @@ export default function AdminPanel() {
                       )}
                     </div>
 
-                    <div className="space-y-2">
+                    {/* Sin filtro de Agentes aquí */}
+                    <div className="space-y-2 opacity-60">
                       <label className="text-sm font-semibold text-slate-700">Agentes</label>
-                      <select
-                        multiple
-                        className="w-full px-4 py-2 rounded-xl border border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all min-h-[100px]"
-                        value={agentFilter}
-                        onChange={(e) => {
-                          const vals = Array.from(e.target.selectedOptions).map(o => o.value);
-                          setAgentFilter(vals);
-                        }}
-                      >
-                        {availableAgents.length === 0
-                          ? <option value="" disabled>(Sin agentes disponibles)</option>
-                          : availableAgents.map((a) => <option key={a} value={a}>{a}</option>)}
-                      </select>
-                      {!!agentFilter.length && (
-                        <div className="mt-1 text-xs text-slate-600">
-                          Seleccionados: {agentFilter.join(", ")}
-                        </div>
-                      )}
+                      <div className="px-4 py-3 text-sm rounded-xl border border-dashed border-slate-300 bg-slate-50 text-slate-500">
+                        El filtrado por vendedor/agente se hace en el detalle (VendorDetailPanel).
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -536,7 +572,7 @@ export default function AdminPanel() {
                   <MiniStatCard title="Vendedores en esta zona" value={vendedoresEnZona} from="#e6f0ff" to="#eaf3ff" text="#312e81" />
                 </div>
 
-                {/* Conversaciones por día (como tarjetas) */}
+                {/* Conversaciones por día */}
                 <ListStatCard
                   title="📈 Conversaciones por día"
                   accent="#2563eb"
@@ -552,7 +588,7 @@ export default function AdminPanel() {
                   }
                 />
 
-                {/* Top etiquetas (como tarjetas) */}
+                {/* Top etiquetas */}
                 <ListStatCard
                   title="🏷️ Top etiquetas"
                   accent="#16a34a"
@@ -568,7 +604,7 @@ export default function AdminPanel() {
                   }
                 />
 
-                {/* Conversaciones por agente (como tarjetas) */}
+                {/* Distribución por agente (estadística) */}
                 <ListStatCard
                   title="👥 Conversaciones por agente"
                   accent="#7c3aed"
@@ -583,50 +619,20 @@ export default function AdminPanel() {
                     </button>
                   }
                 />
-
-                {/* Vendedores por zona (se conserva) */}
-                <section className="p-6 rounded-2xl border shadow-lg backdrop-blur-sm bg-white/90 border-white/20">
-                  <h3 className="mb-4 text-xl font-bold text-slate-800">🌍 Vendedores activos por zona</h3>
-                  <div className="grid gap-4 md:grid-cols-2">
-                    {Object.entries(
-                      zoneFilter === "(todas)"
-                        ? vendedoresPorZona
-                        : { [zoneFilter]: vendedoresPorZona[zoneFilter] || [] }
-                    ).map(([zona, arr]) => (
-                      <div key={zona} className="p-4 bg-gradient-to-br rounded-xl border shadow-sm from-slate-50 to-slate-100 border-slate-200/60">
-                        <div className="flex justify-between items-center mb-3">
-                          <div className="font-semibold text-slate-800">{zona}</div>
-                          <div className="px-2 py-1 text-sm rounded-full text-slate-600 bg-slate-200">
-                            {arr.length} vendedor(es)
-                          </div>
-                        </div>
-                        <ul className="space-y-2">
-                          {arr.map((v) => (
-                            <li
-                              key={v.id}
-                              className="flex justify-between items-center p-2 rounded-lg border bg-white/60 border-slate-200/40"
-                            >
-                              <span className="text-sm font-medium text-slate-700">
-                                {v.alias || v.owner || v.phone}
-                                {v.phone ? ` · ${v.phone}` : ""}
-                              </span>
-                              {!v.active && (
-                                <span className="px-2 py-1 text-xs text-red-500 bg-red-100 rounded-full">inactivo</span>
-                              )}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    ))}
-                  </div>
-                </section>
               </>
             )}
           </div>
         )}
 
         {tab === "tasks" && <TasksPanel />}
-        {tab === "dashboardPro" && <DashboardPro />}
+
+        {/* Vista de detalle del vendedor */}
+        {tab === "vendorDetail" && selectedVendorUid && (
+          <VendorDetailPanel
+            vendorUid={selectedVendorUid}
+            onBack={() => setTab("dashboard")}
+          />
+        )}
       </div>
     </div>
   );

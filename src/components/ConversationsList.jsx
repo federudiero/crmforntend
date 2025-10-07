@@ -8,17 +8,16 @@ import {
   query,
   limit,
   doc,
-  getDoc,
+  getDocs,
   updateDoc,
   runTransaction,
   arrayUnion,
   arrayRemove,
   deleteField,
-  // Paginado y batch fetch
-  getDocs,
   where,
   documentId,
   startAfter,
+  setDoc,
 } from "firebase/firestore";
 import { useAuthState } from "../hooks/useAuthState.js";
 import LabelChips from "./LabelChips";
@@ -39,6 +38,15 @@ function chunk(array, size = 10) {
   return out;
 }
 
+/** Convierte Timestamp/ISO/Date/null -> millis (número) */
+function tsToMillis(ts) {
+  if (!ts) return 0;
+  if (typeof ts?.toMillis === "function") return ts.toMillis();
+  if (ts instanceof Date) return +ts;
+  if (typeof ts === "string") return +new Date(ts);
+  return +new Date(ts);
+}
+
 /** Skeleton simple */
 function RowSkeleton() {
   return (
@@ -52,6 +60,55 @@ function RowSkeleton() {
 
 export default function ConversationsList({ activeId, onSelect }) {
   const { user } = useAuthState();
+
+  // ======= Estilos locales para la animación de "nuevo entrante" =======
+  // (sin depender de tailwind.config)
+  const AttentionStyles = (
+    <style>{`
+      .new-reply {
+        position: relative;
+      }
+      /* Barra izquierda que "late" */
+      .new-reply::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 4px;
+        background: #16a34a; /* green-600 */
+        animation: pulseBar 1.15s ease-in-out infinite;
+        border-top-left-radius: 4px;
+        border-bottom-left-radius: 4px;
+      }
+      @keyframes pulseBar {
+        0%,100% { opacity: 0.4; }
+        50% { opacity: 1; }
+      }
+      /* Badge ping circular */
+      .ping-badge {
+        position: relative;
+        width: 10px;
+        height: 10px;
+        border-radius: 9999px;
+        background: #16a34a;
+        box-shadow: 0 0 0 2px #e6f9ec; /* halo sutil */
+      }
+      .ping-badge::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: 9999px;
+        animation: ping 1.25s cubic-bezier(0, 0, 0.2, 1) infinite;
+        border: 2px solid rgba(22,163,74,0.5);
+      }
+      @keyframes ping {
+        0% { transform: scale(1); opacity: 0.85; }
+        75% { transform: scale(1.9); opacity: 0; }
+        100% { transform: scale(2.1); opacity: 0; }
+      }
+    `}</style>
+  );
 
   // Estado base (feed paginado)
   const [items, setItems] = useState([]);
@@ -68,7 +125,78 @@ export default function ConversationsList({ activeId, onSelect }) {
   const [pageSize, setPageSize] = useState(25); // 10/25/50
   const [pageIndex, setPageIndex] = useState(0); // 0-based
   const cursorsRef = useRef([]); // guarda docSnapshots (último de cada página)
-  const unsubRef = useRef(null); // limpiar subscripción actual
+  const unsubRef = useRef(null); // limpiar suscripción actual
+
+  // =========================
+  //  "Visto" de último entrante
+  //  (persistido en localStorage por conversación)
+  // =========================
+  const SEEN_KEY = "convSeenInbound_v1";
+  const seenInboundRef = useRef({});
+  const [seenTick, setSeenTick] = useState(0);
+  // cargar del LS 1 vez
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SEEN_KEY);
+      seenInboundRef.current = raw ? JSON.parse(raw) : {};
+    } catch {
+      seenInboundRef.current = {};
+    }
+  }, []);
+  const saveSeen = () => {
+    try {
+      localStorage.setItem(SEEN_KEY, JSON.stringify(seenInboundRef.current));
+    } catch {}
+  };
+  // Cargar estado de "visto" desde Firestore para un lote de IDs
+  const loadSeenFor = async (ids) => {
+    try {
+      if (!user?.uid || !Array.isArray(ids) || ids.length === 0) return;
+      for (const ids10 of chunk(ids, 10)) {
+        const snap = await getDocs(
+          query(collection(db, "users", String(user.uid), "convSeen"), where(documentId(), "in", ids10))
+        );
+        snap.forEach((docSnap) => {
+          const id = String(docSnap.id);
+          const data = docSnap.data() || {};
+          const lastInboundSeen = Number(data.lastInboundSeen || 0);
+          if (!Number.isNaN(lastInboundSeen) && lastInboundSeen > 0) {
+            seenInboundRef.current[id] = Math.max(
+              lastInboundSeen,
+              seenInboundRef.current[id] || 0
+            );
+          }
+        });
+      }
+      saveSeen();
+      setSeenTick((t) => t + 1);
+    } catch (e) {
+      console.error("loadSeenFor error:", e);
+    }
+  };
+  const markSeen = async (c) => {
+    const id = String(c.id);
+    const inboundMillis =
+      tsToMillis(c.lastInboundAt) || tsToMillis(c.lastMessageAt);
+    if (!inboundMillis) return;
+    seenInboundRef.current[id] = Math.max(
+      inboundMillis,
+      seenInboundRef.current[id] || 0
+    );
+    saveSeen();
+    // Persistir en Firestore para sincronizar entre dispositivos
+    try {
+      if (user?.uid) {
+        await setDoc(
+          doc(db, "users", String(user.uid), "convSeen", id),
+          { lastInboundSeen: inboundMillis },
+          { merge: true }
+        );
+      }
+    } catch (e) {
+      console.error("markSeen setDoc error:", e);
+    }
+  };
 
   // Suscripción a conversaciones (paginada por actividad desc) — SOLO para tabs != 'etiquetas'
   useEffect(() => {
@@ -117,12 +245,18 @@ export default function ConversationsList({ activeId, onSelect }) {
             }
           }
 
-          const withContacts = rows.map((r) => ({
-            ...r,
-            contact: contactsById[r.id] || null,
-          }));
+      const withContacts = rows.map((r) => ({
+        ...r,
+        contact: contactsById[r.id] || null,
+      }));
 
-          setItems(withContacts);
+      setItems(withContacts);
+      // Cargar estado "visto" desde Firestore para estas IDs
+      try {
+        await loadSeenFor(ids);
+      } catch (e) {
+        console.error("loadSeenFor(paginated) error:", e);
+      }
         } catch (e) {
           console.error("onSnapshot(conversations) paginated error:", e);
         } finally {
@@ -185,11 +319,38 @@ export default function ConversationsList({ activeId, onSelect }) {
         if (currentUid && currentUid !== user.uid) {
           throw new Error("Esta conversación ya está asignada a otro agente.");
         }
+        // 1) Asignar
         tx.update(ref, {
           assignedToUid: user.uid,
           assignedToName: user.displayName || user.email || "Agente",
         });
+        // 2) **Línea de base** de "visto" al momento de asignarme:
+        //    Evita que aparezca el punto por mensajes viejos.
+        const curInbound =
+          tsToMillis(cur.lastInboundAt) || tsToMillis(cur.lastMessageAt);
+        if (curInbound) {
+          const id = String(c.id);
+          seenInboundRef.current[id] = Math.max(
+            curInbound,
+            seenInboundRef.current[id] || 0
+          );
+          saveSeen();
+        }
       });
+      // Persistir baseline "visto" en Firestore para sincronización
+      try {
+        const id = String(c.id);
+        const inboundMillis = seenInboundRef.current[id] || 0;
+        if (user?.uid && inboundMillis > 0) {
+          await setDoc(
+            doc(db, "users", String(user.uid), "convSeen", id),
+            { lastInboundSeen: inboundMillis },
+            { merge: true }
+          );
+        }
+      } catch (e) {
+        console.error("assignToMe setDoc error:", e);
+      }
     } catch (e) {
       console.error("assignToMe error", e);
       alert(e.message || "No se pudo asignar.");
@@ -275,11 +436,7 @@ export default function ConversationsList({ activeId, onSelect }) {
       setLabelsLoading(true);
       setLabelsError("");
       try {
-        // Traemos todas las conversaciones ordenadas por actividad, por lotes.
-        // Filtramos por assignedToUid == user.uid en cliente si no existe índice;
-        // idealmente usar: query(collection(...), where('assignedToUid','==',uid), orderBy('lastMessageAt','desc'))
-        // pero respetamos tu modelo sin exigir índices nuevos.
-        const pageLim = 200; // lote grande para avanzar rápido
+        const pageLim = 200; // lote grande
         let qBase = query(
           collection(db, "conversations"),
           orderBy("lastMessageAt", "desc"),
@@ -288,22 +445,19 @@ export default function ConversationsList({ activeId, onSelect }) {
 
         let out = [];
         let last = null;
-        // Loop de páginas con getDocs (evita suscripción tiempo real costosa)
         while (true) {
           const qRef = last ? query(qBase, startAfter(last)) : qBase;
           const snap = await getDocs(qRef);
           if (snap.empty) break;
 
           const rows = snap.docs.map((d) => ({ id: d.id, ...d.data(), contact: null }));
-          // filtro por asignación a mí y no eliminados
           const mine = rows.filter(
             (c) => !c.deletedAt && c.assignedToUid === user.uid
           );
           out.push(...mine);
 
           last = snap.docs[snap.docs.length - 1];
-          if (snap.size < pageLim) break; // fin
-          // Protección por si hay muchísimos: corta a 10k
+          if (snap.size < pageLim) break;
           if (out.length > 10000) break;
           if (cancelled) return;
         }
@@ -325,6 +479,13 @@ export default function ConversationsList({ activeId, onSelect }) {
           ...r,
           contact: contactsById[r.id] || null,
         }));
+
+        // Cargar estado "visto" desde Firestore para estas IDs (vista etiquetas)
+        try {
+          await loadSeenFor(ids);
+        } catch (e) {
+          console.error("loadSeenFor(labels) error:", e);
+        }
 
         // Orden final por actividad (defensivo)
         withContacts.sort((a, b) => {
@@ -354,7 +515,7 @@ export default function ConversationsList({ activeId, onSelect }) {
   // Array base para agrupar etiquetas (cuando estamos en etiquetas, usamos labelsAll sin paginar)
   const baseForLabels = tab === "etiquetas"
     ? labelsAll
-    : (user?.uid ? filtered.filter((c) => c.assignedToUid === user.uid) : []);
+    : (user?.uid ? filtered.filter((c) => c.assignedToUid === user?.uid) : []);
 
   // Índice por etiqueta (clave normalizada), manteniendo nombre original
   const labelsIndex = useMemo(() => {
@@ -401,8 +562,13 @@ export default function ConversationsList({ activeId, onSelect }) {
   }, [labelsIndex]);
 
   const canOpen = (c) => !c.assignedToUid || c.assignedToUid === user?.uid;
+
+  // Marca "visto" al abrir si corresponde y luego abre
   const tryOpen = (c) => {
-    if (canOpen(c)) onSelect?.(c.id);
+    if (canOpen(c)) {
+      markSeen(c);
+      onSelect?.(c.id);
+    }
   };
 
   // clave seleccionada normalizada
@@ -427,8 +593,21 @@ export default function ConversationsList({ activeId, onSelect }) {
     if (tab !== "etiquetas") setPageIndex(0);
   }, [pageSize, tab]);
 
+  // ========= Cálculo de "nuevo para mí" =========
+  const isNewForMe = (c, isActive, assignedToMe) => {
+    if (!assignedToMe) return false;
+    if (isActive) return false; // si ya estoy dentro, no hace falta llamar la atención
+    const inboundMillis =
+      tsToMillis(c.lastInboundAt) || tsToMillis(c.lastMessageAt);
+    if (!inboundMillis) return false;
+    const seen = seenInboundRef.current[String(c.id)] || 0;
+    return inboundMillis > seen;
+  };
+
   return (
     <div className="flex flex-col min-h-0 h-full border-r bg-[#F6FBF7] border-[#CDEBD6]">
+      {AttentionStyles}
+
       {/* Header superior: tabs + búsqueda + paginado (paginado oculto en 'etiquetas') */}
       <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 p-2 border-b bg-[#E8F5E9] border-[#CDEBD6]">
         {/* Tabs */}
@@ -534,9 +713,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                 const slugs = Array.isArray(c.labels) ? c.labels : [];
                 const assignedToMe = user?.uid && c.assignedToUid === user?.uid;
                 const lockedByOther = !!c.assignedToUid && !assignedToMe;
-                const assigned =
-                  c.assignedToName ||
-                  (c.assignedToUid ? "Asignado" : "No asignado");
+                const showNew = isNewForMe(c, isActive, !!assignedToMe);
 
                 return (
                   <div
@@ -544,14 +721,15 @@ export default function ConversationsList({ activeId, onSelect }) {
                     className={
                       "border-t px-3 py-3 transition-colors border-[#E3EFE7] " +
                       (isActive ? "bg-[#E8F5E9] " : "bg-white hover:bg-[#F1FAF3] ") +
-                      (lockedByOther ? "opacity-60 cursor-not-allowed " : "")
+                      (lockedByOther ? "opacity-60 cursor-not-allowed " : "") +
+                      (showNew ? " new-reply " : "")
                     }
                     role="button"
                     tabIndex={0}
                     onClick={() => tryOpen(c)}
                     onKeyDown={(e) => {
                       if ((e.key === "Enter" || e.key === " ") && canOpen(c))
-                        onSelect?.(c.id);
+                        tryOpen(c);
                     }}
                     title={
                       lockedByOther
@@ -561,8 +739,9 @@ export default function ConversationsList({ activeId, onSelect }) {
                   >
                     <div className="flex gap-3 justify-between items-center">
                       <div className="min-w-0">
-                        <div className="font-mono text-sm truncate">
+                        <div className="flex gap-2 items-center font-mono text-sm truncate">
                           {c.contact?.name || c.id}
+                          {showNew && <span className="ping-badge" title="Nuevo mensaje entrante" />}
                         </div>
                         {c.lastMessageText && (
                           <div className="mt-1 text-xs text-gray-600 truncate">
@@ -687,9 +866,9 @@ export default function ConversationsList({ activeId, onSelect }) {
                           </b>
                         </span>
                       ) : (
-                        <span className="italic text-gray-400">{
-                          c.assignedToName || (c.assignedToUid ? "Asignado" : "No asignado")
-                        }</span>
+                        <span className="italic text-gray-400">
+                          {c.assignedToName || (c.assignedToUid ? "Asignado" : "No asignado")}
+                        </span>
                       )}
                     </div>
                   </div>
@@ -805,50 +984,43 @@ export default function ConversationsList({ activeId, onSelect }) {
                         </summary>
                         <div className="p-2 space-y-1">
                           {items.map((c) => {
-                            const isActive =
-                              String(c.id) === String(activeId || "");
-                            const slugs = Array.isArray(c.labels)
-                              ? c.labels
-                              : [];
+                            const isActive = String(c.id) === String(activeId || "");
+                            const slugs = Array.isArray(c.labels) ? c.labels : [];
                             const assignedToMe =
                               user?.uid && c.assignedToUid === user?.uid;
                             const lockedByOther =
                               !!c.assignedToUid && !assignedToMe;
-                            const assigned =
-                              c.assignedToName ||
-                              (c.assignedToUid ? "Asignado" : "No asignado");
+                            const showNew = isNewForMe(c, isActive, !!assignedToMe);
+
                             return (
                               <div
                                 key={c.id}
                                 className={
                                   "rounded border bg-white px-3 py-2 transition-colors border-[#E3EFE7] " +
                                   (isActive ? "bg-[#E8F5E9] " : "hover:bg-[#F1FAF3] ") +
-                                  (lockedByOther
-                                    ? "opacity-60 cursor-not-allowed "
-                                    : "")
+                                  (lockedByOther ? "opacity-60 cursor-not-allowed " : "") +
+                                  (showNew ? " new-reply " : "")
                                 }
                                 role="button"
                                 tabIndex={0}
                                 onClick={() => tryOpen(c)}
                                 onKeyDown={(e) => {
-                                  if (
-                                    (e.key === "Enter" || e.key === " ") &&
-                                    canOpen(c)
-                                  )
-                                    onSelect?.(c.id);
+                                  if ((e.key === "Enter" || e.key === " ") && canOpen(c))
+                                    tryOpen(c);
                                 }}
                                 title={
                                   lockedByOther
-                                    ? `Asignada a ${
-                                        c.assignedToName || "otro agente"
-                                      }`
+                                    ? `Asignada a ${c.assignedToName || "otro agente"}`
                                     : c.id
                                 }
                               >
                                 <div className="flex gap-2 justify-between items-center">
                                   <div className="min-w-0">
-                                    <div className="font-mono text-sm truncate">
+                                    <div className="flex gap-2 items-center font-mono text-sm truncate">
                                       {c.contact?.name || c.id}
+                                      {showNew && (
+                                        <span className="ping-badge" title="Nuevo mensaje entrante" />
+                                      )}
                                     </div>
                                     <div className="text-[11px] text-gray-500">
                                       {formatShort(c.lastMessageAt)}
@@ -958,8 +1130,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                                       <b>
                                         {c.assignedToUid === user?.uid
                                           ? "mí"
-                                          : c.assignedToName ||
-                                            c.assignedToUid}
+                                          : c.assignedToName || c.assignedToUid}
                                       </b>
                                     </span>
                                   ) : (
@@ -985,23 +1156,23 @@ export default function ConversationsList({ activeId, onSelect }) {
                     const assignedToMe =
                       user?.uid && c.assignedToUid === user?.uid;
                     const lockedByOther = !!c.assignedToUid && !assignedToMe;
-                    const assigned =
-                      c.assignedToName ||
-                      (c.assignedToUid ? "Asignado" : "No asignado");
+                    const showNew = isNewForMe(c, isActive, !!assignedToMe);
+
                     return (
                       <div
                         key={c.id}
                         className={
                           "rounded border bg-white px-3 py-2 transition-colors border-[#E3EFE7] " +
                           (isActive ? "bg-[#E8F5E9] " : "hover:bg-[#F1FAF3] ") +
-                          (lockedByOther ? "opacity-60 cursor-not-allowed " : "")
+                          (lockedByOther ? "opacity-60 cursor-not-allowed " : "") +
+                          (showNew ? " new-reply " : "")
                         }
                         role="button"
                         tabIndex={0}
                         onClick={() => tryOpen(c)}
                         onKeyDown={(e) => {
                           if ((e.key === "Enter" || e.key === " ") && canOpen(c))
-                            onSelect?.(c.id);
+                            tryOpen(c);
                         }}
                         title={
                           lockedByOther
@@ -1011,8 +1182,9 @@ export default function ConversationsList({ activeId, onSelect }) {
                       >
                         <div className="flex gap-2 justify-between items-center">
                           <div className="min-w-0">
-                            <div className="font-mono text-sm truncate">
+                            <div className="flex gap-2 items-center font-mono text-sm truncate">
                               {c.contact?.name || c.id}
+                              {showNew && <span className="ping-badge" title="Nuevo mensaje entrante" />}
                             </div>
                             <div className="text-[11px] text-gray-500">
                               {formatShort(c.lastMessageAt)}
@@ -1042,9 +1214,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                                 className="btn btn-xs md:btn-sm btn-disabled"
                                 disabled
                                 onClick={(e) => e.stopPropagation()}
-                                title={`Asignada a ${
-                                  c.assignedToName || "otro agente"
-                                }`}
+                                title={`Asignada a ${c.assignedToName || "otro agente"}`}
                               >
                                 Ocupada
                               </button>
@@ -1126,7 +1296,10 @@ export default function ConversationsList({ activeId, onSelect }) {
                               </b>
                             </span>
                           ) : (
-                            <span className="italic text-gray-400">{assigned}</span>
+                            <span className="italic text-gray-400">
+                              {c.assignedToName ||
+                                (c.assignedToUid ? "Asignado" : "No asignado")}
+                            </span>
                           )}
                         </div>
                       </div>

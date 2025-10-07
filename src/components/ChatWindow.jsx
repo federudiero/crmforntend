@@ -11,6 +11,7 @@ import {
   orderBy,
   query,
   updateDoc,
+  deleteDoc, // << añadido
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { useAuthState } from "../hooks/useAuthState.js";
@@ -38,6 +39,10 @@ import {
   UserRound,
   Smile,
   ExternalLink,
+  Edit3,   // << añadidos
+  Trash2,  // << añadidos
+  Check,   // << añadidos
+  X,       // << añadidos
 } from "lucide-react";
 
 // =========================
@@ -166,6 +171,10 @@ export default function ChatWindow({ conversationId, onBack }) {
   // Modal imagen
   const [imagePreviewUrl, setImagePreviewUrl] = useState(null);
 
+  // --- edición/eliminación de mensajes (solo salientes) ---
+  const [editingMessageId, setEditingMessageId] = useState(null);
+  const [editingText, setEditingText] = useState("");
+
   // ---- refs ----
   const viewportRef = useRef(null);
   const textareaRef = useRef(null);
@@ -173,7 +182,7 @@ export default function ChatWindow({ conversationId, onBack }) {
   const audioInputRef = useRef(null);
   const attachBtnRef = useRef(null);
   const emojiPickerRef = useRef(null);
-  const emojiBtnRef = useRef(null); // <<<<<< NUEVO: ref del botón de emojis
+  const emojiBtnRef = useRef(null); // ref del botón de emojis
 
   const didInitialAutoScroll = useRef(false);
 
@@ -193,6 +202,9 @@ export default function ChatWindow({ conversationId, onBack }) {
     // Limpiar archivos seleccionados
     setSelectedImage(null);
     setSelectedAudio(null);
+    // Cerrar edición
+    setEditingMessageId(null);
+    setEditingText("");
     didInitialAutoScroll.current = false;
     requestAnimationFrame(() => viewportRef.current?.scrollTo({ top: 0 }));
   }, [conversationId]);
@@ -299,7 +311,6 @@ export default function ChatWindow({ conversationId, onBack }) {
     return true;
   }, [canRead]);
 
-  // mensajes
   // mensajes (escuchar ambas subcolecciones y mergear)
   useEffect(() => {
     if (!conversationId || !canRead) {
@@ -331,7 +342,7 @@ export default function ChatWindow({ conversationId, onBack }) {
       });
 
       // Verificar si hay más mensajes disponibles
-      const totalMessages = a.length + b.length;
+      const totalMessages = a.length + b.length; // eslint-disable-line @typescript-eslint/no-unused-vars
       const uniqueMessages = arr.length;
       setHasMoreMessages(uniqueMessages >= messageLimit && (a.length === messageLimit || b.length === messageLimit));
 
@@ -341,7 +352,8 @@ export default function ChatWindow({ conversationId, onBack }) {
     const unsubA = onSnapshot(
       qA,
       (snap) => {
-        a = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        // << añadido __col para saber de qué subcolección viene el doc
+        a = snap.docs.map((d) => ({ id: d.id, __col: "messages", ...d.data() }));
         applyMerge();
       },
       (err) => console.error("onSnapshot(messages) error:", err)
@@ -350,7 +362,8 @@ export default function ChatWindow({ conversationId, onBack }) {
     const unsubB = onSnapshot(
       qB,
       (snap) => {
-        b = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        // << añadido __col para saber de qué subcolección viene el doc
+        b = snap.docs.map((d) => ({ id: d.id, __col: "msgs", ...d.data() }));
         applyMerge();
       },
       (err) => console.error("onSnapshot(msgs) error:", err)
@@ -461,6 +474,61 @@ export default function ChatWindow({ conversationId, onBack }) {
   const handleEmojiSelect = (emoji) => {
     insertEmojiAtCursor(emoji);
     setShowEmojiPicker(false);
+  };
+
+  // ======= Edición/Eliminación salientes =======
+  const beginEditMessage = (m) => {
+    if (!isOutgoingMessage(m, user) || !canWrite) return;
+    setEditingText(getVisibleText(m));
+    setEditingMessageId(m.id);
+  };
+
+  const cancelEditMessage = () => {
+    setEditingMessageId(null);
+    setEditingText("");
+  };
+
+  const saveEditMessage = async () => {
+    try {
+      if (!conversationId || !editingMessageId) return;
+      const m = msgs.find((x) => x.id === editingMessageId);
+      if (!m) return;
+      if (!isOutgoingMessage(m, user) || !canWrite) return;
+
+      const colName = m.__col === "messages" ? "messages" : "msgs";
+      const ref = doc(db, "conversations", String(conversationId), colName, String(m.id));
+      const newText = (editingText || "").trim();
+
+      await updateDoc(ref, {
+        text: newText,                  // modelos simples
+        "message.text.body": newText,   // WA nested
+        body: newText,                  // fallback
+        caption: newText || null,       // si era media con caption
+        updatedBy: user?.email || user?.uid || "agent",
+        updatedAt: new Date(),
+      });
+
+      setEditingMessageId(null);
+      setEditingText("");
+    } catch (e) {
+      alert(e?.message || "No se pudo editar el mensaje.");
+    }
+  };
+
+  const deleteMessage = async (m) => {
+    try {
+      if (!conversationId || !m?.id) return;
+      if (!isOutgoingMessage(m, user) || !canWrite) return;
+
+      const ok = confirm("¿Eliminar definitivamente este mensaje saliente?");
+      if (!ok) return;
+
+      const colName = m.__col === "messages" ? "messages" : "msgs";
+      const ref = doc(db, "conversations", String(conversationId), colName, String(m.id));
+      await deleteDoc(ref);
+    } catch (e) {
+      alert(e?.message || "No se pudo eliminar el mensaje.");
+    }
   };
 
   // envío texto y archivos multimedia
@@ -604,7 +672,7 @@ export default function ChatWindow({ conversationId, onBack }) {
     };
   }, [showAttachMenu]);
 
-  // <<<<<< MODIFICADO: cerrar emoji picker ignorando el botón del propio picker
+  // cerrar emoji picker ignorando el botón del propio picker
   useEffect(() => {
     if (!showEmojiPicker) return;
     const onDocClick = (e) => {
@@ -621,7 +689,6 @@ export default function ChatWindow({ conversationId, onBack }) {
       document.removeEventListener("keydown", onEsc);
     };
   }, [showEmojiPicker]);
-  // >>>>>>
 
   // ---------- render ----------
 
@@ -992,7 +1059,7 @@ export default function ChatWindow({ conversationId, onBack }) {
                             {m.status === "error" && (
                               <div
                                 className={`mt-2 text-xs flex items-center gap-1 ${
-                                  isOut ? "text-red-200" : "text-red-500"
+                                  isOut ? "text-red-2 00" : "text-red-500"
                                 }`}
                               >
                                 <span>⚠️</span>
@@ -1007,6 +1074,7 @@ export default function ChatWindow({ conversationId, onBack }) {
                           </div>
                         )}
 
+                        {/* Acciones y timestamp */}
                         <div className="flex gap-2 justify-between items-center mt-2">
                           <div
                             className={`text-xs ${
@@ -1015,14 +1083,65 @@ export default function ChatWindow({ conversationId, onBack }) {
                           >
                             {formatTs(m.timestamp)}
                           </div>
-                          {canWrite && (
-                            <StarButton
-                              chatId={conversationId}
-                              messageId={m.id}
-                              texto={visibleText}
-                            />
-                          )}
+                          <div className="flex gap-1 items-center">
+                            {canWrite && (
+                              <StarButton
+                                chatId={conversationId}
+                                messageId={m.id}
+                                texto={visibleText}
+                              />
+                            )}
+                            {isOut && canWrite && (
+                              <>
+                                <button
+                                  className={`btn btn-ghost btn-xs ${isOut ? "text-white/90" : "text-gray-700"}`}
+                                  title="Editar mensaje"
+                                  onClick={() => beginEditMessage(m)}
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  className={`btn btn-ghost btn-xs ${isOut ? "text-white/90" : "text-gray-700"}`}
+                                  title="Eliminar mensaje"
+                                  onClick={() => deleteMessage(m)}
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </>
+                            )}
+                          </div>
                         </div>
+
+                        {/* Editor inline solo para el mensaje saliente seleccionado */}
+                        {isOut && editingMessageId === m.id && (
+                          <div
+                            className={`mt-2 p-2 rounded-lg border ${isOut ? "border-white/40 bg-white/10" : "bg-gray-50 border-gray-300"}`}
+                          >
+                            <textarea
+                              className={`w-full textarea textarea-xs ${isOut ? "text-white placeholder:text-white/70" : ""}`}
+                              rows={3}
+                              value={editingText}
+                              onChange={(e) => setEditingText(e.target.value)}
+                              placeholder="Editar texto/caption…"
+                            />
+                            <div className="flex gap-2 justify-end mt-2">
+                              <button
+                                className={`btn btn-xs ${isOut ? "text-white bg-white/20 border-white/40" : ""}`}
+                                onClick={cancelEditMessage}
+                                title="Cancelar"
+                              >
+                                <X className="mr-1 w-3.5 h-3.5" /> Cancelar
+                              </button>
+                              <button
+                                className="btn btn-xs btn-success"
+                                onClick={saveEditMessage}
+                                title="Guardar"
+                              >
+                                <Check className="mr-1 w-3.5 h-3.5" /> Guardar
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1165,7 +1284,7 @@ export default function ChatWindow({ conversationId, onBack }) {
                   ref={emojiBtnRef}
                   className="btn btn-square btn-sm border border-[#CDEBD6] bg-white text-black hover:bg-[#F1FAF3]"
                   disabled={!canWrite}
-                  onClick={(e) => { e.stopPropagation(); setShowEmojiPicker((v) => !v); }} // <<<<<< evita cierre inmediato
+                  onClick={(e) => { e.stopPropagation(); setShowEmojiPicker((v) => !v); }}
                   title="Insertar emoji"
                 >
                   <Smile className="w-4 h-4" />
