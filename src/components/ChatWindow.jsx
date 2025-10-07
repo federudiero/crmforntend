@@ -45,6 +45,27 @@ import {
   X,       // << añadidos
 } from "lucide-react";
 
+// === DEBUG WhatsApp ===
+function logWaSendOutcome(label, apiResp, payload, extra = {}) {
+  const r = apiResp?.results?.[0] || {};
+  const code = r?.error?.error?.code ?? r?.error?.code ?? null;
+  const err  = r?.error?.error ?? r?.error ?? null;
+
+  console.groupCollapsed(
+    `%c[WA DEBUG] ${label} — ok:${apiResp?.ok ? "✅" : "❌"} code:${code ?? "-"}`,
+    "color:#0aa"
+  );
+  console.log("→ payload.template", payload?.template);
+  console.log("→ apiResp", apiResp);
+  console.log("→ result", r);
+  console.log("→ error.code", code, "error.obj", err);
+  console.log("→ extras", extra);
+  if (code === 131042) {
+    console.warn("⚠️ Problema de pago (131042): revisar Pagos en Business Manager (producto WhatsApp).");
+  }
+  console.groupEnd();
+}
+
 // =========================
 // PREVIEW FIX — mediaUrl resolver
 // Prioridad: media.url → media.link → (top-level) url/fileUrl → mediaUrl → image.link/url → audio.link/url
@@ -92,6 +113,26 @@ function formatTs(ts) {
   return d ? d.toLocaleString() : "";
 }
 
+
+
+
+function emailHandle(v) {
+  const s = String(v || "");
+  const i = s.indexOf("@");
+  return i > 0 ? s.slice(0, i) : s;
+}
+
+// Limpia nombres tipo "hola hola", "¡hola!" etc.
+function cleanClientName(n) {
+  let s = String(n || "").trim();
+  // sacamos saludos iniciales repetidos y signos
+  s = s.replace(/^[¡!]*\s*hola+\s*/i, ""); // "hola", "¡hola", "hola!"
+  s = s.replace(/^\s*hola+\s*/i, "");      // otro intento por si queda doble
+  // colapsamos espacios extra
+  s = s.replace(/\s+/g, " ").trim();
+  return s || "!";
+}
+
 // Detecta si un mensaje es saliente (mío)
 function isOutgoingMessage(m, user) {
   if (typeof m?.direction === "string") return m.direction === "out";
@@ -122,6 +163,76 @@ function isOutgoingMessage(m, user) {
 // Texto visible robusto (WhatsApp a veces lo guarda en text.body / message.text.body / raw.* / caption)
 function getVisibleText(m) {
   if (!m) return "";
+
+  // 0) Si el backend guardó un preview legible, úsalo
+  if (typeof m?.textPreview === "string" && m.textPreview.trim()) {
+    return m.textPreview.trim();
+  }
+
+  // 1) ¿Es mensaje de plantilla?
+  const asTemplate =
+    m?.type === "template" ||
+    m?.message?.type === "template" ||
+    m?.raw?.type === "template" ||
+    !!m?.template ||
+    !!m?.message?.template ||
+    !!m?.raw?.template ||
+    !!m?.raw?.messages?.[0]?.template;
+
+  if (asTemplate) {
+    // 1.a) Nombre de la plantilla (en varias rutas)
+    let name =
+      m?.template?.name ||
+      m?.message?.template?.name ||
+      m?.raw?.template?.name ||
+      m?.raw?.messages?.[0]?.template?.name ||
+      m?.raw?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.template?.name ||
+      "";
+
+    // Si template es string en docs viejos, úsalo como nombre
+    if (!name && typeof m?.template === "string") name = m.template;
+
+    // 1.b) Parámetros del body (varias rutas)
+    const params =
+      m?.template?.components?.[0]?.parameters ||
+      m?.message?.template?.components?.[0]?.parameters ||
+      m?.raw?.template?.components?.[0]?.parameters ||
+      m?.raw?.messages?.[0]?.template?.components?.[0]?.parameters ||
+      m?.raw?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.template?.components?.[0]?.parameters ||
+      [];
+
+    const pText = (i) =>
+      typeof params?.[i]?.text === "string" ? params[i].text : "";
+
+    // 1.c) Reconstrucción especial para tu HSM reengage (3 vars)
+    const looksLikeReengage =
+      name === "reengage_free_text" || (params?.length >= 2 && params?.length <= 3);
+
+    if (looksLikeReengage) {
+      // después
+const cliente = pText(0) || "";
+const vendedor = pText(1) || "Equipo de Ventas";
+const marca    = pText(2) || (import.meta.env?.VITE_BRAND_NAME || "Tu Comercio");
+
+const saludo = cliente ? `¡Hola ${cliente}!` : `¡Hola!`;
+
+return (
+  `${saludo} Soy ${vendedor} de ${marca}.\n` +
+  `Te escribo para retomar tu consulta ya que pasaron más de 24 horas desde el último mensaje.\n` +
+  `Respondé a este mensaje para continuar la conversación.`
+);
+    }
+
+    // 1.d) Preview genérico
+    const parts = params
+      .map((p) => (typeof p?.text === "string" ? p.text : ""))
+      .filter(Boolean);
+
+    const label = name ? `Plantilla ${name}` : "Plantilla";
+    return parts.length ? `[${label}] ${parts.join(" • ")}` : `[${label}]`;
+  }
+
+  // 2) Texto normal / caption
   const candidates = [
     typeof m?.text === "string" ? m.text : null,
     m?.text?.body,
@@ -132,11 +243,56 @@ function getVisibleText(m) {
     m?.raw?.text?.body,
     m?.raw?.message?.text?.body,
   ].filter(Boolean);
+
   if (candidates.length > 0) return String(candidates[0]);
   if (typeof m?.text === "object") return JSON.stringify(m.text || "");
   return "";
 }
 
+
+// ===== Ventana 24 h =====
+const OUTSIDE_MS = 24 * 60 * 60 * 1000 - 10 * 60 * 1000; // margen 10'
+function toMillisMaybe(ts) {
+  if (!ts) return 0;
+  if (typeof ts === "number") return ts;
+  if (typeof ts?.toMillis === "function") return ts.toMillis();
+  const d = Date.parse(ts);
+  return Number.isFinite(d) ? d : 0;
+}
+function isOutside24h(lastInboundAt) {
+  const ms = toMillisMaybe(lastInboundAt);
+  if (!ms) return true; // si no sabemos, asumimos fuera para no fallar
+  return Date.now() - ms > OUTSIDE_MS;
+}
+
+// === Reengage Template (env) ===
+const REENGAGE_TEMPLATE = import.meta.env.VITE_WA_REENGAGE_TEMPLATE || "reengage_free_text";
+const REENGAGE_LANG = import.meta.env.VITE_WA_REENGAGE_LANG || "es_AR";
+const BRAND_NAME = import.meta.env.VITE_BRAND_NAME || "Tu Comercio";
+
+// Construye payload de plantilla con 3 parámetros: {{1}} cliente, {{2}} vendedor, {{3}} marca
+function buildReengageTemplate({ clientName, sellerName, brandName /*, freeText*/ }) {
+  const p1 = cleanClientName(clientName || "!");
+  const p2 = emailHandle(sellerName || "Equipo de Ventas");
+  const p3 = brandName || BRAND_NAME;
+
+  return {
+    name: REENGAGE_TEMPLATE,
+    language: { code: REENGAGE_LANG },
+    components: [
+      {
+        type: "body",
+        parameters: [
+          { type: "text", text: p1 },
+          { type: "text", text: p2 },
+          { type: "text", text: p3 },
+          // si más adelante querés volver a usar freeText como {{4}}, lo agregás acá
+          // { type: "text", text: (freeText || "").trim() || "¿Seguimos con tu consulta?" }
+        ],
+      },
+    ],
+  };
+}
 export default function ChatWindow({ conversationId, onBack }) {
   const { user } = useAuthState();
   const navigate = useNavigate();
@@ -264,7 +420,7 @@ export default function ChatWindow({ conversationId, onBack }) {
   // permisos
   const isAdmin =
     !!user?.email &&
-    ["federudiero@gmail.com", "fede_rudiero@gmail.com"].includes(user.email);
+    ["federudiero@gmail.com", "alainismael95@gmail.com", "fede_rudiero@gmail.com"].includes(user.email);
 
   const canRead = useMemo(() => {
     const assignedToUid = convMeta?.assignedToUid || null;
@@ -531,7 +687,7 @@ export default function ChatWindow({ conversationId, onBack }) {
     }
   };
 
-  // envío texto y archivos multimedia
+  // ======= envío texto y archivos multimedia =======
   const doSend = async () => {
     const body = (text || "").trim();
     const hasText = !!body;
@@ -541,62 +697,126 @@ export default function ChatWindow({ conversationId, onBack }) {
     // Verificar que hay algo que enviar (texto, imagen o audio)
     if (!conversationId || (!hasText && !hasImage && !hasAudio) || !canWrite) return;
 
+    // Calcular si estamos fuera de 24 h respecto del último inbound
+    const lastInboundAt =
+      convMeta?.lastInboundAt ??
+      convMeta?.lastInboundMessageAt ??
+      convMeta?.lastMessageInboundAt ??
+      convMeta?.lastMessageAt; // fallback (menos preciso)
+
+    const outside = isOutside24h(lastInboundAt);
+  const sellerName = emailHandle(user?.email || user?.displayName || "Equipo de Ventas");
+
+
+
     // Limpiar estados inmediatamente
     setText("");
     const imageToSend = selectedImage;
     const audioToSend = selectedAudio;
     setSelectedImage(null);
     setSelectedAudio(null);
-    
+
     requestAnimationFrame(() => textareaRef.current?.focus());
 
     try {
-      // Enviar texto si existe
+      // 1) Enviar TEXT o TEMPLATE (según ventana)
       if (hasText) {
-        const textResult = await sendMessage({ 
-          to: String(conversationId), 
-          text: body, 
-          conversationId 
-        });
-        
-        const serverConvId = textResult?.results?.[0]?.to;
-        if (serverConvId && serverConvId !== conversationId) {
-          navigate(`/app/${encodeURIComponent(serverConvId)}`, {
-            replace: true,
+       if (outside) {
+  const clientName = contact?.name || contact?.fullName || "";
+  const templatePayload = buildReengageTemplate({
+    clientName,
+    sellerName,          // ← usa el de arriba (ya con emailHandle)
+    brandName: BRAND_NAME,
+    freeText: body,
+  });
+
+          const tplRes = await sendMessage({
+            to: String(conversationId),
+            conversationId,
+            sellerName,
+            template: templatePayload,
           });
-        }
-        if (textResult && textResult.ok === false) {
-          const err = textResult?.results?.[0]?.error;
-          const code =
-            err?.error?.code ??
-            err?.code ??
-            (typeof err === "string" ? err : "");
-          alert(`No se pudo enviar el texto.\nCódigo: ${code || "desconocido"}`);
+
+          logWaSendOutcome("auto-24h", tplRes, { template: templatePayload }, {
+            conversationId,
+            outside,
+            clientName,
+            sellerName,
+            brandName: BRAND_NAME,
+          });
+
+          const serverConvId = tplRes?.results?.[0]?.to;
+          if (serverConvId && serverConvId !== conversationId) {
+            navigate(`/app/${encodeURIComponent(serverConvId)}`, { replace: true });
+          }
+          if (tplRes && tplRes.ok === false) {
+            const err = tplRes?.results?.[0]?.error;
+            const code = err?.error?.code ?? err?.code ?? "";
+            alert(`No se pudo enviar la plantilla.\nCódigo: ${code || "desconocido"}`);
+            if (code === 131042) {
+              alert("Problema de pago en WhatsApp (131042). Regularizar método de pago de la cuenta.");
+            }
+          }
+        } else {
+          // Dentro de ventana: texto normal
+          const textResult = await sendMessage({
+            to: String(conversationId),
+            text: body,
+            conversationId,
+            sellerName,
+          });
+          const serverConvId = textResult?.results?.[0]?.to;
+          if (serverConvId && serverConvId !== conversationId) {
+            navigate(`/app/${encodeURIComponent(serverConvId)}`, { replace: true });
+          }
+          if (textResult && textResult.ok === false) {
+            const err = textResult?.results?.[0]?.error;
+            const code = err?.error?.code ?? err?.code ?? "";
+            alert(`No se pudo enviar el texto.\nCódigo: ${code || "desconocido"}`);
+          }
         }
       }
 
-      // Enviar imagen si existe
+      // 2) Enviar imagen (solo si hay)
       if (hasImage && imageToSend) {
         setSending(true);
         const dest = `uploads/${conversationId}/${Date.now()}_${imageToSend.name}`;
         const { url } = await uploadFile(imageToSend, dest);
-        await sendMessage({
+        const res = await sendMessage({
           to: String(conversationId),
           conversationId,
+          sellerName,
           image: { link: url }
         });
+        if (res && res.ok === false) {
+          const err = res?.results?.[0]?.error;
+          const code =
+            err?.error?.code ??
+            err?.code ??
+            (typeof err === "string" ? err : "");
+          alert(`No se pudo enviar la imagen.\nCódigo: ${code || "desconocido"}`);
+        }
       }
 
-      // Enviar audio si existe
+      // 3) Enviar audio (solo si hay)
       if (hasAudio && audioToSend) {
         setSending(true);
         const dest = `uploads/${conversationId}/${Date.now()}_${audioToSend.name}`;
         const { url } = await uploadFile(audioToSend, dest);
-        await sendMessage({
+        const res = await sendMessage({
           to: String(conversationId),
           conversationId,
+          sellerName,
           audio: { link: url }
         });
+        if (res && res.ok === false) {
+          const err = res?.results?.[0]?.error;
+          const code =
+            err?.error?.code ??
+            err?.code ??
+            (typeof err === "string" ? err : "");
+          alert(`No se pudo enviar el audio.\nCódigo: ${code || "desconocido"}`);
+        }
       }
 
       scrollToBottom("smooth");
@@ -608,7 +828,7 @@ export default function ChatWindow({ conversationId, onBack }) {
     }
   };
 
-  // adjuntos
+  // adjuntos (atajo de picker → sube y envía)
   const handlePickAndSend = async (file, kind /* "image" | "audio" */) => {
     if (!file || !conversationId || !canWrite) return;
     try {
@@ -617,11 +837,12 @@ export default function ChatWindow({ conversationId, onBack }) {
       const { url } = await uploadFile(file, dest);
       const payload =
         kind === "image" ? { image: { link: url } } : { audio: { link: url } };
-      await sendMessage({
-        to: String(conversationId),
-        conversationId,
-        ...payload,
-      });
+     await sendMessage({
+  to: String(conversationId),
+  conversationId,
+  sellerName: emailHandle(user?.email || user?.displayName || "Equipo de Ventas"),
+  ...payload,
+});
       scrollToBottom("smooth");
     } catch (err) {
       alert(err?.message || `No se pudo enviar el ${kind}`);
@@ -1318,6 +1539,49 @@ export default function ChatWindow({ conversationId, onBack }) {
                 )}
               </div>
 
+              {/* Plantilla 24 h (manual) */}
+              <button
+                className="snap-start btn btn-xs md:btn-sm bg-white text-black hover:bg-[#F1FAF3] border border-[#CDEBD6]"
+                disabled={!canWrite || sending}
+                title="Enviar Plantilla 24 h"
+                onClick={async () => {
+                  try {
+                    const sellerName = emailHandle(user?.email || user?.displayName || "Equipo de Ventas");
+                    const clientName = contact?.name || contact?.fullName || "";
+                    const templatePayload = buildReengageTemplate({
+                      clientName,
+                      sellerName,
+                      brandName: BRAND_NAME,
+                      freeText: (text || "").trim() || "¿Seguimos con tu consulta?",
+                    });
+                    setText("");
+                    const tplRes = await sendMessage({
+                      to: String(conversationId),
+                      conversationId,
+                      sellerName,
+                      template: templatePayload,
+                    });
+                    logWaSendOutcome("manual-24h", tplRes, { template: templatePayload }, {
+                      conversationId,
+                      clientName,
+                      sellerName,
+                      brandName: BRAND_NAME,
+                    });
+                    const code = tplRes?.results?.[0]?.error?.error?.code || tplRes?.results?.[0]?.error?.code;
+                    if (tplRes && tplRes.ok === false) {
+                      alert(`No se pudo enviar la plantilla.\nCódigo: ${code || "desconocido"}`);
+                      if (code === 131042) {
+                        alert("WhatsApp rechazó la plantilla por un problema de pago (131042). Revisar Pagos en Business Manager (WhatsApp).");
+                      }
+                    }
+                  } catch (e) {
+                    alert(e?.message || "No se pudo enviar la plantilla.");
+                  }
+                }}
+              >
+                24 h
+              </button>
+
               {/* Enviar */}
               <button
                 onClick={doSend}
@@ -1362,7 +1626,8 @@ export default function ChatWindow({ conversationId, onBack }) {
 
       {imagePreviewUrl && (
         <div
-          className="fixed inset-0 z-[95] bg-black/70 grid place-items-center p-4"
+          className="
+fixed inset-0 z-[95] bg-black/70 grid place-items-center p-4"
           onClick={() => setImagePreviewUrl(null)}  // click en backdrop cierra
         >
           <div

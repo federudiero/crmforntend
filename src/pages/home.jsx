@@ -5,20 +5,23 @@ import { auth, db } from "../firebase";
 import { doc, onSnapshot, updateDoc, serverTimestamp } from "firebase/firestore";
 import { useAuthState } from "../hooks/useAuthState.js";
 
-import usePresence from "../hooks/usePresence"; // 👈 nuevo
+import usePresence from "../hooks/usePresence";
 
 import ConversationsList from "../components/ConversationsList.jsx";
 import ChatWindow from "../components/ChatWindow.jsx";
 import NewConversation from "../components/NewConversation.jsx";
 import AdminPanel from "../components/AdminPanel.jsx";
-import RemarketingBulk from "../components/RemarketingBulk.jsx"; // 👈 agregado
+import RemarketingBulk from "../components/RemarketingBulk.jsx";
+
+// 👇 NUEVO: import de la Agenda
+import AgendaCalendario from "../components/AgendaCalendario.jsx";
 
 export default function Home() {
   const { user } = useAuthState();
   const navigate = useNavigate();
   const { convId } = useParams();
 
-  // 👇 activa presencia del vendedor apenas entra a Home (área de vendedor)
+  // activa presencia del vendedor apenas entra a Home (área de vendedor)
   usePresence({
     // si tenés el teléfono del vendedor en algún store/ctx, devolvelo acá (opcional)
     getSellerPhone: () => null,
@@ -26,6 +29,10 @@ export default function Home() {
 
   // UI local
   const [showRemarketing, setShowRemarketing] = useState(false);
+
+  // 👇 NUEVO: estado para abrir/cerrar la Agenda
+  const [showAgenda, setShowAgenda] = useState(false);
+
   const [currentConvMeta, setCurrentConvMeta] = useState(null);
   const [assignLoading, setAssignLoading] = useState(false);
 
@@ -43,10 +50,13 @@ export default function Home() {
     if (decoded) setMobileView("chat");
   }, [decoded]);
 
-  // ESC para cerrar remarketing
+  // ESC para cerrar remarketing o agenda
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === "Escape") setShowRemarketing(false);
+      if (e.key === "Escape") {
+        setShowRemarketing(false);
+        setShowAgenda(false);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -141,7 +151,7 @@ export default function Home() {
 
   const currentConvId = decoded;
 
-  // 👇 logout del vendedor: marcamos offline antes de salir
+  // logout del vendedor: marcamos offline antes de salir
   const logoutVendedor = async () => {
     try {
       const uid = auth.currentUser?.uid;
@@ -207,12 +217,21 @@ export default function Home() {
             Remarketing
           </button>
 
+          {/* 👇 NUEVO: botón Agenda (disponible para todos) */}
+          <button
+            className="hidden px-3 py-1 text-sm rounded border md:inline-flex"
+            onClick={() => setShowAgenda(true)}
+            title="Abrir Agenda del vendedor"
+          >
+            Agenda
+          </button>
+
           {/* Botones para vendedores (usuarios no-admin) */}
           {!isAdmin && <NewConversation onOpen={openConv} />}
 
           <button
             className="px-2 py-1 text-sm rounded border"
-            onClick={logoutVendedor} // 👈 ahora usa logout con offline
+            onClick={logoutVendedor}
             title="Cerrar sesión"
           >
             Salir
@@ -236,7 +255,7 @@ export default function Home() {
                 />
               </aside>
 
-              {/* 👇 ocupar todo el ancho del slot y ocultar overflow-x */}
+              {/* ocupar todo el ancho del slot y ocultar overflow-x */}
               <main className="flex overflow-x-hidden col-span-8 w-full h-full min-h-0">
                 {currentConvId ? (
                   canAccess ? (
@@ -258,6 +277,17 @@ export default function Home() {
 
             {/* Mobile ≤ md: panel único conmutado */}
             <div className="h-full md:hidden">
+              {/* 👇 NUEVO: botón Agenda para mobile */}
+              <div className="flex gap-2 p-2 border-b">
+                <button
+                  className="flex-1 btn btn-sm"
+                  onClick={() => setShowAgenda(true)}
+                  title="Abrir Agenda"
+                >
+                  Agenda
+                </button>
+              </div>
+
               {mobileView === "list" && (
                 <div className="overflow-hidden h-full min-h-0">
                   <ConversationsList
@@ -296,6 +326,25 @@ export default function Home() {
       {/* Modal Remarketing */}
       {showRemarketing && (
         <RemarketingBulk onClose={() => setShowRemarketing(false)} />
+      )}
+
+      {/* 👇 NUEVO: Modal con AgendaCalendario (responsive, grande) */}
+      {showAgenda && (
+        <div className="modal modal-open">
+          <div className="w-11/12 max-w-6xl modal-box">
+            <div className="flex gap-3 justify-between items-center mb-2">
+              <h3 className="text-lg font-bold">Agenda del vendedor</h3>
+              <button className="btn btn-sm" onClick={() => setShowAgenda(false)} aria-label="Cerrar">✕</button>
+            </div>
+            {/* Altura grande con scroll interno para que no afecte el layout del chat */}
+            <div className="h-[70vh] overflow-auto">
+              <AgendaCalendario />
+            </div>
+          </div>
+          <div className="modal-backdrop" onClick={() => setShowAgenda(false)}>
+            <button>close</button>
+          </div>
+        </div>
       )}
     </div>
   );
