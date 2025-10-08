@@ -250,6 +250,83 @@ return (
   return "";
 }
 
+// Subcomponente para mensajes de ubicación (entrantes)
+// Subcomponente para mensajes de ubicación (entrantes) con fallback a iframe
+function LocationBubble({ m }) {
+  const [imgError, setImgError] = React.useState(false);
+  const loc = m?.location || {};
+  const lat = Number(loc.lat ?? loc.latitude);
+  const lng = Number(loc.lng ?? loc.longitude);
+  const hasCoords = Number.isFinite(lat) && Number.isFinite(lng);
+
+  const mapsUrl =
+    loc.url || (hasCoords ? `https://www.google.com/maps?q=${lat},${lng}` : null);
+
+  // 1) Google Static Maps (si hay key)
+  const gKey = import.meta?.env?.VITE_GOOGLE_STATIC_MAPS_KEY;
+  const size = "480x240";
+  const googleStaticUrl =
+    hasCoords && gKey
+      ? `https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=15&size=${size}&markers=${lat},${lng}&key=${gKey}`
+      : null;
+
+  // 2) OSM Static como fallback (sin iframe)
+  const osmStaticUrl =
+    hasCoords
+      ? `https://staticmap.openstreetmap.de/staticmap.php?center=${lat},${lng}&zoom=15&size=${size}&maptype=mapnik&markers=${lat},${lng},lightblue1`
+      : null;
+
+  // decidimos qué imagen intentar
+  const staticUrl = googleStaticUrl || osmStaticUrl;
+
+  return (
+    <div className="rounded-xl border border-[#CDEBD6] bg-white px-3 py-2 text-sm max-w-xs">
+      <div className="mb-1 font-medium">📍 Ubicación</div>
+
+      {loc.name && <div className="truncate">{loc.name}</div>}
+      {loc.address && <div className="truncate text-black/70">{loc.address}</div>}
+
+      {hasCoords && (
+        <div className="mt-1 text-xs text-black/60">
+          {lat.toFixed(5)}, {lng.toFixed(5)}
+        </div>
+      )}
+
+      {/* Preview SOLO imagen (sin iframe). Si falla, se oculta */}
+      {hasCoords && staticUrl && !imgError && (
+        <a
+          href={mapsUrl || staticUrl}
+          target="_blank"
+          rel="noreferrer"
+          title="Abrir en el mapa"
+          className="block mt-2"
+        >
+          <img
+            src={staticUrl}
+            alt="Mapa de ubicación"
+            className="w-full h-auto rounded-lg border border-black/10"
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            onError={() => setImgError(true)}
+          />
+        </a>
+      )}
+
+      {/* Si no hay imagen o falló, solo dejamos el link */}
+      {mapsUrl && (
+        <a
+          className="inline-flex items-center gap-1 mt-2 text-xs underline text-[#2E7D32]"
+          href={mapsUrl}
+          target="_blank"
+          rel="noreferrer"
+          title="Abrir en Google Maps"
+        >
+          Ver en Maps
+        </a>
+      )}
+    </div>
+  );
+}
 
 // ===== Ventana 24 h =====
 const OUTSIDE_MS = 24 * 60 * 60 * 1000 - 10 * 60 * 1000; // margen 10'
@@ -1172,7 +1249,10 @@ export default function ChatWindow({ conversationId, onBack }) {
                           </div>
                         )}
                         {/* PREVIEW FIX — Render */}
-                        {effectiveType === "image" && mediaUrl ? (
+                        {/* Caso: Ubicación */}
+                        {(m?.type === "location" || m?.location || m?.media?.kind === "location") ? (
+                          <LocationBubble m={m} />
+                        ) : effectiveType === "image" && mediaUrl ? (
                           <>
                             <img
                               src={mediaUrl}
@@ -1532,7 +1612,7 @@ export default function ChatWindow({ conversationId, onBack }) {
               {/* Reply chip over input */}
               {replyTo && (
                 <div className="absolute -top-9 left-0 right-0 flex items-center justify-between px-3 py-1 rounded-md border bg-white border-[#CDEBD6] text-sm">
-                  <div className="flex items-center gap-2 min-w-0">
+                  <div className="flex gap-2 items-center min-w-0">
                     <CornerUpLeft className="w-4 h-4 text-[#2E7D32]" />
                     <span className="truncate">
                       {(replyTo.textPreview || (replyTo.type === "image" ? "Imagen" : replyTo.type === "audio" ? "Audio" : "Mensaje"))}
