@@ -268,6 +268,11 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
     });
   }, [convsByLabel, q]);
 
+  // Ventas marcadas como "vendido" en el conjunto filtrado
+  const ventasConvs = useMemo(() => {
+    return convsFiltered.filter(c => Array.isArray(c.labels) && c.labels.includes("vendido"));
+  }, [convsFiltered]);
+
   useEffect(() => { setPage(1); }, [q, labelFilter, from, to, mode]);
 
   const totalItems = convsFiltered.length;
@@ -607,6 +612,7 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
             to="#f0fff3"
             text="#065f46"
           />
+          <MiniStatCard title="Ventas (Vendido)" value={ventasConvs.length} from="#dcfce7" to="#e7f9ef" text="#065f46" />
         </div>
 
         {/* Serie por día */}
@@ -633,6 +639,49 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
                 </div>
               ))}
             </div>
+          )}
+        </section>
+
+        {/* Últimas ventas */}
+        <section className="p-6 rounded-2xl border shadow bg-white/90">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-xl font-bold text-slate-800">🛒 Últimas ventas</h3>
+            <div className="text-sm text-slate-600">{ventasConvs.length} ventas en el período</div>
+          </div>
+          {ventasConvs.length === 0 ? (
+            <div className="p-6 text-center rounded-xl border text-slate-500 bg-slate-50 border-slate-200">
+              Sin ventas en el período.
+            </div>
+          ) : (
+            <ul className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
+              {ventasConvs
+                .slice()
+                .sort((a,b) => (
+                  (tsToMs(b.soldAt) || tsToMs(b.lastMessageAt) || tsToMs(b.createdAt)) -
+                  (tsToMs(a.soldAt) || tsToMs(a.lastMessageAt) || tsToMs(a.createdAt))
+                ))
+                .slice(0, 20)
+                .map((c) => (
+                  <li key={c.id} className="p-3 bg-white rounded-xl border hover:bg-slate-50 flex items-center justify-between">
+                    <div>
+                      <div className="font-medium">{c.contact?.name || "—"}</div>
+                      <div className="text-xs text-slate-500">{c.id}</div>
+                      <div className="mt-1 text-xs text-slate-600">
+                        Vendido por {c.soldByName || c.assignedToName || c.assignedToUid || "—"}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-xs text-slate-600">
+                        {(() => {
+                          const ms = tsToMs(c.soldAt) || tsToMs(c.lastMessageAt) || tsToMs(c.createdAt);
+                          return ms ? new Date(ms).toLocaleString() : "—";
+                        })()}
+                      </div>
+                      <span className="mt-1 inline-block px-2 py-1 text-xs rounded-full bg-green-100 text-green-700">Vendido</span>
+                    </div>
+                  </li>
+                ))}
+            </ul>
           )}
         </section>
 

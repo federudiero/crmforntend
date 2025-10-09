@@ -308,6 +308,21 @@ export default function AdminPanel() {
     [kpis.porAgente]
   );
 
+  // 🛒 Ventas por vendedor (con etiqueta 'vendido')
+  const ventasPorAgente = useMemo(() => {
+    const map = new Map();
+    for (const c of convsFiltered) {
+      const ls = Array.isArray(c.labels) ? c.labels : [];
+      if (!ls.includes("vendido")) continue;
+      const key = c.assignedToName || c.assignedToUid || "Sin asignar";
+      map.set(key, (map.get(key) || 0) + 1);
+    }
+    return Array.from(map.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 50)
+      .map(([k, v]) => ({ k, v }));
+  }, [convsFiltered]);
+
   // Vendedores activos / por zona
   const vendedoresActivos = useMemo(() => vendors.filter(v => !!v.active), [vendors]);
   const vendedoresPorZona = useMemo(() => {
@@ -618,6 +633,14 @@ export default function AdminPanel() {
                       📊 Exportar CSV
                     </button>
                   }
+                />
+
+                {/* Ventas por vendedor */}
+                <ListStatCard
+                  title="🛒 Ventas por vendedor"
+                  accent="#16a34a"
+                  data={ventasPorAgente}
+                  formatter={(k) => String(k)}
                 />
               </>
             )}

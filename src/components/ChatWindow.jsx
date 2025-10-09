@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   arrayRemove,
+  arrayUnion,
   collection,
   doc,
   getDoc,
@@ -134,6 +135,48 @@ function cleanClientName(n) {
   return s || "!";
 }
 
+// --- helpers locales (no mover a otros archivos) ---
+// --- helpers (arriba del archivo) ---
+const SELLER_NAME_MAP = {
+  "lunacami00@gmail.com": "Camila",
+  "escalantefr.p@gmail.com": "Fernando",
+  "julicisneros.89@gmail.com": "Julieta",
+};
+
+const prettifyLocal = (email = "") =>
+  (email.split("@")[0] || "")
+    .replace(/[._-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .map(w => (w ? w[0].toUpperCase() + w.slice(1) : ""))
+    .join(" ");
+
+const getSellerDisplayName = (user = {}) => {
+  const email = String(user.email || "").toLowerCase().trim();
+  const alias = (user.alias || "").trim();
+  const name  = (user.name  || "").trim();
+  if (alias) return alias;
+  if (name) return name;
+  if (email && SELLER_NAME_MAP[email]) return SELLER_NAME_MAP[email];
+  if (email) return prettifyLocal(email);
+  return "Equipo de Ventas";
+};
+
+// evita parámetros vacíos que disparan 131008
+const safeParam = (v) => {
+  const s = (v ?? "").toString();
+  return s.trim() ? s : "\u200B"; // Zero-Width Space
+};
+
+
+// Prioriza nombre del CRM o el de perfil WA que llega en webhooks
+const getClientName = (contact = {}, raw = {}) => {
+  const crm = (contact.displayName || contact.name || "").trim();
+  const waProfile = raw?.entry?.[0]?.changes?.[0]?.value?.contacts?.[0]?.profile?.name || "";
+  return (crm || waProfile || "").trim();
+};
+
 // Detecta si un mensaje es saliente (mío)
 function isOutgoingMessage(m, user) {
   if (typeof m?.direction === "string") return m.direction === "out";
@@ -165,11 +208,6 @@ function isOutgoingMessage(m, user) {
 function getVisibleText(m) {
   if (!m) return "";
 
-  // 0) Si el backend guardó un preview legible, úsalo
-  if (typeof m?.textPreview === "string" && m.textPreview.trim()) {
-    return m.textPreview.trim();
-  }
-
   // 1) ¿Es mensaje de plantilla?
   const asTemplate =
     m?.type === "template" ||
@@ -189,8 +227,6 @@ function getVisibleText(m) {
       m?.raw?.messages?.[0]?.template?.name ||
       m?.raw?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.template?.name ||
       "";
-
-    // Si template es string en docs viejos, úsalo como nombre
     if (!name && typeof m?.template === "string") name = m.template;
 
     // 1.b) Parámetros del body (varias rutas)
@@ -202,35 +238,48 @@ function getVisibleText(m) {
       m?.raw?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.template?.components?.[0]?.parameters ||
       [];
 
-    const pText = (i) =>
-      typeof params?.[i]?.text === "string" ? params[i].text : "";
+    const pText = (i) => (typeof params?.[i]?.text === "string" ? params[i].text : "");
 
-    // 1.c) Reconstrucción especial para tu HSM reengage (3 vars)
+    // === igual que tenés hoy: normalizador con mapa por email ===
+    const normalizeSeller = (val) => {
+      const s = (val || "").toString().trim();
+      if (!s) return "Equipo de Ventas";
+      if (s.includes("@")) {
+        const email = s.toLowerCase();
+        if (SELLER_NAME_MAP[email]) return SELLER_NAME_MAP[email];
+        return prettifyLocal(email);
+      }
+      return s;
+    };
+
+    // 1.c) Reconstrucción especial para HSM reengage (2–3 vars)
     const looksLikeReengage =
       name === "reengage_free_text" || (params?.length >= 2 && params?.length <= 3);
 
     if (looksLikeReengage) {
-      // después
-const cliente = pText(0) || "";
-const vendedor = pText(1) || "Equipo de Ventas";
-const marca    = pText(2) || (import.meta.env?.VITE_BRAND_NAME || "Tu Comercio");
+      const cliente  = pText(0) || "";
+      const vendedor = normalizeSeller(pText(1)); // ← aplica mapa aquí
+      const marca    = "HogarCril";               // fijo
 
-const saludo = cliente ? `¡Hola ${cliente}!` : `¡Hola!`;
-
-return (
-  `${saludo} Soy ${vendedor} de ${marca}.\n` +
-  `Te escribo para retomar tu consulta ya que pasaron más de 24 horas desde el último mensaje.\n` +
-  `Respondé a este mensaje para continuar la conversación.`
-);
+      const saludo = cliente ? `¡Hola ${cliente}!` : `¡Hola!`;
+      return (
+        `${saludo} Soy ${vendedor} de ${marca}.\n` +
+        `Te escribo para retomar tu consulta ya que pasaron más de 24 horas desde el último mensaje.\n` +
+        `Respondé a este mensaje para continuar la conversación.`
+      );
     }
 
-    // 1.d) Preview genérico
+    // 1.d) Preview genérico para el resto de plantillas
     const parts = params
       .map((p) => (typeof p?.text === "string" ? p.text : ""))
       .filter(Boolean);
-
     const label = name ? `Plantilla ${name}` : "Plantilla";
     return parts.length ? `[${label}] ${parts.join(" • ")}` : `[${label}]`;
+  }
+
+  // 0) Solo si NO es plantilla, usar preview del backend
+  if (typeof m?.textPreview === "string" && m.textPreview.trim()) {
+    return m.textPreview.trim();
   }
 
   // 2) Texto normal / caption
@@ -249,6 +298,8 @@ return (
   if (typeof m?.text === "object") return JSON.stringify(m.text || "");
   return "";
 }
+
+
 
 // Subcomponente para mensajes de ubicación (entrantes)
 // Subcomponente para mensajes de ubicación (entrantes) con fallback a iframe
@@ -349,10 +400,13 @@ const REENGAGE_LANG = import.meta.env.VITE_WA_REENGAGE_LANG || "es_AR";
 const BRAND_NAME = import.meta.env.VITE_BRAND_NAME || "Tu Comercio";
 
 // Construye payload de plantilla con 3 parámetros: {{1}} cliente, {{2}} vendedor, {{3}} marca
-function buildReengageTemplate({ clientName, sellerName, brandName /*, freeText*/ }) {
-  const p1 = cleanClientName(clientName || "!");
-  const p2 = emailHandle(sellerName || "Equipo de Ventas");
-  const p3 = brandName || BRAND_NAME;
+function buildReengageTemplate({ contact, sellerUser, rawWebhookSnapshot /*, freeText*/ }) {
+  // {{1}}: si hay nombre → "Andrea", si no → "" (la plantilla debe quedar como "Hola {{1}}!")
+  const p1 = (getClientName(contact || {}, rawWebhookSnapshot) || "\u200B").trim();
+  // {{2}}: nombre humano del vendedor (alias/name o “cameleado” desde email)
+  const p2 = getSellerDisplayName(sellerUser);
+  // {{3}}: marca fija
+  const p3 = "HogarCril";
 
   return {
     name: REENGAGE_TEMPLATE,
@@ -361,9 +415,9 @@ function buildReengageTemplate({ clientName, sellerName, brandName /*, freeText*
       {
         type: "body",
         parameters: [
-          { type: "text", text: p1 },
-          { type: "text", text: p2 },
-          { type: "text", text: p3 },
+          { type: "text", text: p1 }, // {{1}}
+          { type: "text", text: p2 }, // {{2}}
+          { type: "text", text: p3 }, // {{3}}
           // si más adelante querés volver a usar freeText como {{4}}, lo agregás acá
           // { type: "text", text: (freeText || "").trim() || "¿Seguimos con tu consulta?" }
         ],
@@ -411,6 +465,9 @@ export default function ChatWindow({ conversationId, onBack }) {
 
   // --- reply state ---
   const [replyTo, setReplyTo] = useState(null); // { id, type, textPreview, mediaUrl, isOut }
+
+  // UX: prevenir doble click en "Vendido"
+  const [savingSold, setSavingSold] = useState(false);
 
   // ---- refs ----
   const viewportRef = useRef(null);
@@ -807,7 +864,12 @@ export default function ChatWindow({ conversationId, onBack }) {
       convMeta?.lastMessageAt; // fallback (menos preciso)
 
     const outside = isOutside24h(lastInboundAt);
-  const sellerName = emailHandle(user?.email || user?.displayName || "Equipo de Ventas");
+  const sellerUser = {
+    alias: convMeta?.assignedToName || "",
+    name: user?.displayName || user?.name || "",
+    email: user?.email || "",
+  };
+  const sellerName = getSellerDisplayName(sellerUser);
 
 
 
@@ -824,12 +886,18 @@ export default function ChatWindow({ conversationId, onBack }) {
       // 1) Enviar TEXT o TEMPLATE (según ventana)
       if (hasText) {
        if (outside) {
-  const clientName = contact?.name || contact?.fullName || "";
+  const rawWebhookSnapshot = (() => {
+    try {
+      for (const m of msgs) {
+        if (!isOutgoingMessage(m, user) && m?.raw) return m.raw;
+      }
+      return null;
+    } catch { return null; }
+  })();
   const templatePayload = buildReengageTemplate({
-    clientName,
-    sellerName,          // ← usa el de arriba (ya con emailHandle)
-    brandName: BRAND_NAME,
-    freeText: body,
+    contact,
+    sellerUser,
+    rawWebhookSnapshot,
   });
 
           const tplRes = await sendMessage({
@@ -842,9 +910,8 @@ export default function ChatWindow({ conversationId, onBack }) {
           logWaSendOutcome("auto-24h", tplRes, { template: templatePayload }, {
             conversationId,
             outside,
-            clientName,
             sellerName,
-            brandName: BRAND_NAME,
+            brandName: "HogarCril",
           });
 
           const serverConvId = tplRes?.results?.[0]?.to;
@@ -1033,6 +1100,33 @@ export default function ChatWindow({ conversationId, onBack }) {
     convMeta?.clientPhone || contact?.phone || String(conversationId || "");
   const contactId = String(conversationId || phone || "");
 
+  // Toggle "Vendido"
+  const isSold = Array.isArray(convMeta?.labels) && convMeta.labels.includes("vendido");
+  const toggleSold = async () => {
+    if (!conversationId || !canWrite) return;
+    try {
+      setSavingSold(true);
+      if (!isSold) {
+        await updateDoc(doc(db, "conversations", String(conversationId)), {
+          labels: arrayUnion("vendido"),
+          soldAt: new Date(),
+          soldByUid: user?.uid || null,
+          soldByEmail: user?.email || null,
+          soldByName: user?.displayName || user?.email || null,
+          updatedAt: new Date(),
+        });
+      } else {
+        await updateDoc(doc(db, "conversations", String(conversationId)), {
+          labels: arrayRemove("vendido"),
+        });
+      }
+    } catch {
+      alert("No se pudo actualizar el estado 'Vendido'.");
+    } finally {
+      setSavingSold(false);
+    }
+  };
+
   return (
     <div className="flex h-full min-h-0 w-full overflow-x-hidden flex-col text-black bg-[#F6FBF7]">
       {/* Header */}
@@ -1096,6 +1190,21 @@ export default function ChatWindow({ conversationId, onBack }) {
               >
                 <TagsIcon className="w-4 h-4" />
                 <span className="hidden xs:inline">Etiquetar</span>
+              </button>
+
+              {/* Vendido toggle */}
+              <button
+                className={
+                  "snap-start btn btn-xs md:btn-sm gap-2 border " +
+                  (isSold
+                    ? "bg-green-600 text-white hover:bg-green-700 border-green-700"
+                    : "bg-white text-black hover:bg-[#F1FAF3] border-[#CDEBD6]")
+                }
+                onClick={toggleSold}
+                title={isSold ? "Vendido ✓" : "Marcar vendido"}
+                disabled={!canWrite || savingSold}
+              >
+                <span className="hidden xs:inline">{isSold ? "Vendido ✓" : "Marcar vendido"}</span>
               </button>
 
               {/* Perfil */}
@@ -1689,13 +1798,24 @@ export default function ChatWindow({ conversationId, onBack }) {
                 title="Enviar Plantilla 24 h"
                 onClick={async () => {
                   try {
-                    const sellerName = emailHandle(user?.email || user?.displayName || "Equipo de Ventas");
-                    const clientName = contact?.name || contact?.fullName || "";
+                    const sellerUser = {
+                      alias: convMeta?.assignedToName || "",
+                      name: user?.displayName || user?.name || "",
+                      email: user?.email || "",
+                    };
+                    const sellerName = getSellerDisplayName(sellerUser);
+                    const rawWebhookSnapshot = (() => {
+                      try {
+                        for (const m of msgs) {
+                          if (!isOutgoingMessage(m, user) && m?.raw) return m.raw;
+                        }
+                        return null;
+                      } catch { return null; }
+                    })();
                     const templatePayload = buildReengageTemplate({
-                      clientName,
-                      sellerName,
-                      brandName: BRAND_NAME,
-                      freeText: (text || "").trim() || "¿Seguimos con tu consulta?",
+                      contact,
+                      sellerUser,
+                      rawWebhookSnapshot,
                     });
                     setText("");
                     const tplRes = await sendMessage({
@@ -1706,9 +1826,8 @@ export default function ChatWindow({ conversationId, onBack }) {
                     });
                     logWaSendOutcome("manual-24h", tplRes, { template: templatePayload }, {
                       conversationId,
-                      clientName,
                       sellerName,
-                      brandName: BRAND_NAME,
+                      brandName: "HogarCril",
                     });
                     const code = tplRes?.results?.[0]?.error?.error?.code || tplRes?.results?.[0]?.error?.code;
                     if (tplRes && tplRes.ok === false) {
