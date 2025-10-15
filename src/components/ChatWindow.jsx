@@ -140,7 +140,7 @@ function cleanClientName(n) {
 const SELLER_NAME_MAP = {
   "lunacami00@gmail.com": "Camila",
   "escalantefr.p@gmail.com": "Fernando",
-  "julicisneros.89@gmail.com": "Julieta",
+  "julicisneros.89@gmail.com": "Juliana",
 };
 
 const prettifyLocal = (email = "") =>

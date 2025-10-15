@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { signOut } from "firebase/auth";
-import { auth, db } from "../firebase";
+import { auth, db, ensurePushToken, listenForegroundMessages } from "../firebase";
 import { doc, onSnapshot, updateDoc, serverTimestamp } from "firebase/firestore";
 import { useAuthState } from "../hooks/useAuthState.js";
 
@@ -86,6 +86,36 @@ export default function Home() {
 
     return unsubscribe;
   }, [decoded]);
+
+  // === NUEVO: Push — token + navegar al tocar la notificación ===
+  useEffect(() => {
+    if (!user) return;
+
+    // Guarda/actualiza el token FCM del vendedor
+    ensurePushToken();
+
+    // Mensajes en foreground (opcional: reemplazá por un toast/badge)
+    let unsub = () => {};
+    (async () => {
+      unsub = await listenForegroundMessages((info) => {
+        console.log("[FCM] foreground:", info);
+      });
+    })();
+
+    // Mensaje del SW para navegar (cuando se toca la notificación)
+    const onSwMsg = (event) => {
+      if (event?.data?.__SW_NAVIGATE__) {
+        const url = event.data.__SW_NAVIGATE__;
+        navigate(url, { replace: false });
+      }
+    };
+    navigator.serviceWorker?.addEventListener?.("message", onSwMsg);
+
+    return () => {
+      unsub?.();
+      navigator.serviceWorker?.removeEventListener?.("message", onSwMsg);
+    };
+  }, [user, navigate]);
 
   const adminEmails = useMemo(() => ["alainismael95@gmail.com", "fede_rudiero@gmail.com"], []);
   const isAdmin = !!user?.email && adminEmails.includes(user.email);
