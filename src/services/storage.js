@@ -3,7 +3,7 @@ import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { storage } from "../firebase";
 
 async function uploadViaBackend(file, conversationId) {
-  const base = import.meta.env.VITE_API_BASE;
+  const base = (import.meta.env.VITE_API_BASE || "").replace(/\/$/, "");
   const fd = new FormData();
   fd.append("conversationId", conversationId);
   fd.append("file", file, file.name);
@@ -54,6 +54,7 @@ export async function uploadFile(file, destPath, opts = {}) {
   const allowed = opts.allowed || [
     "image/jpeg","image/png","image/webp","image/gif",
     "audio/mpeg","audio/ogg","audio/wav","audio/mp4","audio/aac",
+    "application/pdf",
   ];
   const maxBytes = opts.maxBytes || 25 * 1024 * 1024;
   const type = (file.type || "").toLowerCase();

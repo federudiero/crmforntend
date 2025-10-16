@@ -81,6 +81,8 @@ function resolveMediaUrl(m) {
     m?.url || // salientes (top-level)
     m?.fileUrl || // salientes (top-level alternativo)
     m?.mediaUrl ||
+    m?.document?.link ||
+    m?.document?.url ||
     m?.image?.link ||
     m?.image?.url ||
     m?.audio?.link ||
@@ -441,6 +443,7 @@ export default function ChatWindow({ conversationId, onBack }) {
   // Estados para archivos seleccionados (envío manual)
   const [selectedImage, setSelectedImage] = useState(null);
   const [selectedAudio, setSelectedAudio] = useState(null);
+  const [selectedDoc, setSelectedDoc] = useState(null);
 
   const [convSlugs, setConvSlugs] = useState([]);
   const [allLabels, setAllLabels] = useState([]);
@@ -474,6 +477,7 @@ export default function ChatWindow({ conversationId, onBack }) {
   const textareaRef = useRef(null);
   const imageInputRef = useRef(null);
   const audioInputRef = useRef(null);
+  const docInputRef = useRef(null);
   const attachBtnRef = useRef(null);
   const emojiPickerRef = useRef(null);
   const emojiBtnRef = useRef(null); // ref del botón de emojis
@@ -497,6 +501,7 @@ export default function ChatWindow({ conversationId, onBack }) {
     // Limpiar archivos seleccionados
     setSelectedImage(null);
     setSelectedAudio(null);
+    setSelectedDoc(null);
     // Cerrar edición
     setEditingMessageId(null);
     setEditingText("");
@@ -688,12 +693,12 @@ export default function ChatWindow({ conversationId, onBack }) {
     try {
       const isOut = isOutgoingMessage(m, user);
       const mediaUrl = resolveMediaUrl(m);
-      const type = m?.media?.kind || m?.mediaKind || m?.type || (m?.image ? "image" : m?.audio ? "audio" : "text");
+      const type = m?.media?.kind || m?.mediaKind || m?.type || (m?.document ? "document" : m?.image ? "image" : m?.audio ? "audio" : "text");
       const visibleText = getVisibleText(m);
       setReplyTo({
         id: m.id,
         type,
-        textPreview: (visibleText || (type === "image" ? "Imagen" : type === "audio" ? "Audio" : "")) || "",
+        textPreview: (visibleText || (type === "image" ? "Imagen" : type === "audio" ? "Audio" : type === "document" ? "Documento" : "")) || "",
         mediaUrl: mediaUrl || null,
         isOut,
       });
@@ -852,9 +857,10 @@ export default function ChatWindow({ conversationId, onBack }) {
     const hasText = !!body;
     const hasImage = !!selectedImage;
     const hasAudio = !!selectedAudio;
+    const hasDoc = !!selectedDoc;
 
     // Verificar que hay algo que enviar (texto, imagen o audio)
-    if (!conversationId || (!hasText && !hasImage && !hasAudio) || !canWrite) return;
+    if (!conversationId || (!hasText && !hasImage && !hasAudio && !hasDoc) || !canWrite) return;
 
     // Calcular si estamos fuera de 24 h respecto del último inbound
     const lastInboundAt =
@@ -877,8 +883,10 @@ export default function ChatWindow({ conversationId, onBack }) {
     setText("");
     const imageToSend = selectedImage;
     const audioToSend = selectedAudio;
+    const docToSend = selectedDoc;
     setSelectedImage(null);
     setSelectedAudio(null);
+    setSelectedDoc(null);
 
     requestAnimationFrame(() => textareaRef.current?.focus());
 
@@ -991,6 +999,32 @@ export default function ChatWindow({ conversationId, onBack }) {
         }
       }
 
+      // 4) Enviar documento (solo si hay)
+      if (hasDoc && docToSend) {
+        setSending(true);
+        const dest = `uploads/${conversationId}/${Date.now()}_${docToSend.name}`;
+        const { url } = await uploadFile(docToSend, dest, { allowed: [
+          "application/pdf",
+          "image/jpeg","image/png","image/webp","image/gif",
+          "audio/mpeg","audio/ogg","audio/wav","audio/mp4","audio/aac",
+        ] });
+        const res = await sendMessage({
+          to: String(conversationId),
+          conversationId,
+          sellerName,
+          document: { link: url, filename: docToSend?.name || undefined },
+          ...(replyTo ? { replyTo: { id: replyTo.id, type: replyTo.type, text: replyTo.textPreview } } : {}),
+        });
+        if (res && res.ok === false) {
+          const err = res?.results?.[0]?.error;
+          const code =
+            err?.error?.code ??
+            err?.code ??
+            (typeof err === "string" ? err : "");
+          alert(`No se pudo enviar el documento.\nCódigo: ${code || "desconocido"}`);
+        }
+      }
+
       scrollToBottom("smooth");
     } catch (e) {
       alert(e?.message || "No se pudo enviar");
@@ -1002,14 +1036,18 @@ export default function ChatWindow({ conversationId, onBack }) {
   };
 
   // adjuntos (atajo de picker → sube y envía)
-  const handlePickAndSend = async (file, kind /* "image" | "audio" */) => {
+  const handlePickAndSend = async (file, kind /* "image" | "audio" | "document" */) => {
     if (!file || !conversationId || !canWrite) return;
     try {
       setSending(true);
       const dest = `uploads/${conversationId}/${Date.now()}_${file.name}`;
       const { url } = await uploadFile(file, dest);
       const payload =
-        kind === "image" ? { image: { link: url } } : { audio: { link: url } };
+        kind === "image"
+          ? { image: { link: url } }
+          : kind === "audio"
+          ? { audio: { link: url } }
+          : { document: { link: url, filename: file?.name || undefined } };
       await sendMessage({
         to: String(conversationId),
         conversationId,
@@ -1041,6 +1079,15 @@ export default function ChatWindow({ conversationId, onBack }) {
     e.target.value = "";
     if (file) {
       setSelectedAudio(file);
+      setShowAttachMenu(false);
+    }
+  };
+
+  const onPickDocument = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (file) {
+      setSelectedDoc(file);
       setShowAttachMenu(false);
     }
   };
@@ -1353,7 +1400,15 @@ export default function ChatWindow({ conversationId, onBack }) {
                           <div className={`mb-2 border-l-4 pl-3 ${isOut ? "border-white/50" : "border-[#CDEBD6]"}`}>
                             <div className={`text-[11px] ${isOut ? "text-white/70" : "text-gray-500"}`}>En respuesta a</div>
                             <div className={`text-sm ${isOut ? "text-white" : "text-gray-800"}`}>
-                              {m.replyTo?.text || m.replyTo?.snippet || (m.replyTo?.type === "image" ? "Imagen" : m.replyTo?.type === "audio" ? "Audio" : "Mensaje")}
+                              {m.replyTo?.text || m.replyTo?.snippet || (
+                                m.replyTo?.type === "image"
+                                  ? "Imagen"
+                                  : m.replyTo?.type === "audio"
+                                  ? "Audio"
+                                  : m.replyTo?.type === "document"
+                                  ? "Documento"
+                                  : "Mensaje"
+                              )}
                             </div>
                           </div>
                         )}
@@ -1503,6 +1558,29 @@ export default function ChatWindow({ conversationId, onBack }) {
                           <audio controls className="max-w-full">
                             <source src={mediaUrl} />
                           </audio>
+                        ) : effectiveType === "document" && mediaUrl ? (
+                          <div className="flex flex-col gap-2">
+                            <a
+                              href={mediaUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className={`inline-flex items-center gap-2 px-3 py-2 rounded-md border ${
+                                isOut ? "text-white border-white/30 bg-white/10" : "text-gray-700 bg-gray-50 border-gray-300"
+                              }`}
+                              title="Abrir documento"
+                            >
+                              <FileText className="w-4 h-4" />
+                              <span className="truncate max-w-[220px]">
+                                {m?.document?.filename || (typeof mediaUrl === "string" ? mediaUrl.split("/").pop()?.split("?")[0] : "Documento")}
+                              </span>
+                              <ExternalLink className="w-3 h-3 opacity-75" />
+                            </a>
+                            {visibleText ? (
+                              <div className={`text-sm ${isOut ? "text-white/80" : "text-gray-700"}`}>
+                                {visibleText}
+                              </div>
+                            ) : null}
+                          </div>
                         ) : (
                           <div className="leading-relaxed whitespace-pre-wrap break-words">
                             {visibleText}
@@ -1623,7 +1701,7 @@ export default function ChatWindow({ conversationId, onBack }) {
 
             <div className="relative flex items-end gap-2 rounded-xl border border-[#CDEBD6] bg-white p-2 shadow-sm">
               {/* Mostrar archivos seleccionados */}
-              {(selectedImage || selectedAudio) && (
+              {(selectedImage || selectedAudio || selectedDoc) && (
                 <div className="absolute -top-16 left-0 right-0 bg-white border border-[#CDEBD6] rounded-lg p-2 shadow-sm">
                   <div className="flex gap-2 items-center text-sm text-gray-600">
                     {selectedImage && (
@@ -1652,6 +1730,19 @@ export default function ChatWindow({ conversationId, onBack }) {
                         </button>
                       </div>
                     )}
+                    {selectedDoc && (
+                      <div className="flex gap-2 items-center px-2 py-1 bg-purple-50 rounded">
+                        <FileText className="w-4 h-4 text-purple-600" />
+                        <span className="truncate max-w-32">{selectedDoc.name}</span>
+                        <button
+                          onClick={() => setSelectedDoc(null)}
+                          className="ml-1 text-red-500 hover:text-red-700"
+                          title="Quitar documento"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -1670,6 +1761,13 @@ export default function ChatWindow({ conversationId, onBack }) {
                 accept="audio/*"
                 hidden
                 onChange={onPickAudio}
+              />
+              <input
+                ref={docInputRef}
+                type="file"
+                accept="application/pdf"
+                hidden
+                onChange={onPickDocument}
               />
 
               {/* Adjuntos */}
@@ -1707,6 +1805,14 @@ export default function ChatWindow({ conversationId, onBack }) {
                       <FileAudio2 className="w-4 h-4" />
                       Audio
                     </button>
+                    <button
+                      className="gap-2 justify-start w-full btn btn-ghost btn-sm"
+                      onClick={() => docInputRef.current?.click()}
+                      disabled={!canWrite || sending}
+                    >
+                      <FileText className="w-4 h-4" />
+                      Documento
+                    </button>
                     <div className="w-full">
                       <AudioRecorderButton
                         conversationId={conversationId}
@@ -1724,7 +1830,17 @@ export default function ChatWindow({ conversationId, onBack }) {
                   <div className="flex gap-2 items-center min-w-0">
                     <CornerUpLeft className="w-4 h-4 text-[#2E7D32]" />
                     <span className="truncate">
-                      {(replyTo.textPreview || (replyTo.type === "image" ? "Imagen" : replyTo.type === "audio" ? "Audio" : "Mensaje"))}
+                      {(
+                        replyTo.textPreview || (
+                          replyTo.type === "image"
+                            ? "Imagen"
+                            : replyTo.type === "audio"
+                            ? "Audio"
+                            : replyTo.type === "document"
+                            ? "Documento"
+                            : "Mensaje"
+                        )
+                      )}
                     </span>
                   </div>
                   <button className="btn btn-ghost btn-xs" onClick={cancelReplyTo} title="Cancelar respuesta">
@@ -1847,7 +1963,7 @@ export default function ChatWindow({ conversationId, onBack }) {
               {/* Enviar */}
               <button
                 onClick={doSend}
-                disabled={!(text.trim() || selectedImage || selectedAudio) || !canWrite}
+                disabled={!(text.trim() || selectedImage || selectedAudio || selectedDoc) || !canWrite}
                 className="gap-2 btn"
                 style={{
                   backgroundColor: "#2E7D32",

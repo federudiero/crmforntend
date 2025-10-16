@@ -121,12 +121,16 @@ export default function AdminPanel() {
   const [usersByUid, setUsersByUid] = useState({});
 
   // Filtros globales (sin agente)
-  const [mode, setMode] = useState("7");
+  const [mode, setMode] = useState("7"); // ← ahora también soporta "today"
   const [from, setFrom] = useState(ymd(startOfDay(new Date(Date.now() - 6 * 86400000))));
   const [to, setTo] = useState(ymd(new Date()));
   const [zoneFilter, setZoneFilter] = useState("(todas)");
   const [labelFilter, setLabelFilter] = useState([]);
   const [q, setQ] = useState("");
+
+  // Paginado de tabla global
+  const [page, setPage] = useState(1);
+  const pageSize = 10;
 
   // Zonas dinámicas (desde vendors activos)
   const zonas = useMemo(() => {
@@ -178,9 +182,13 @@ export default function AdminPanel() {
     return () => { try { unsubUsers && unsubUsers(); } catch {} };
   }, [tab]);
 
-  // Períodos rápidos
+  // Períodos rápidos (agrego "today")
   useEffect(() => {
-    if (mode === "7") {
+    if (mode === "today") {
+      const now = new Date();
+      setFrom(ymd(startOfDay(now)));
+      setTo(ymd(now));
+    } else if (mode === "7") {
       const end = new Date();
       const start = startOfDay(new Date(Date.now() - 6 * 86400000));
       setFrom(ymd(start)); setTo(ymd(end));
@@ -264,6 +272,17 @@ export default function AdminPanel() {
       return id.includes(s) || name.includes(s);
     });
   }, [convsByLabel, q]);
+
+  // ⚠️ Reset de página ante cambios de filtros
+  useEffect(() => { setPage(1); }, [mode, from, to, zoneFilter, labelFilter, q]);
+
+  // Paginado
+  const totalItems = convsFiltered.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const pageClamped = Math.min(page, totalPages);
+  const sliceStart = (pageClamped - 1) * pageSize;
+  const sliceEnd   = sliceStart + pageSize;
+  const convsPage  = convsFiltered.slice(sliceStart, sliceEnd);
 
   // KPIs globales
   const kpis = useMemo(() => {
@@ -480,6 +499,7 @@ export default function AdminPanel() {
                         value={mode}
                         onChange={(e) => setMode(e.target.value)}
                       >
+                        <option value="today">Hoy</option>
                         <option value="7">Últimos 7 días</option>
                         <option value="30">Últimos 30 días</option>
                         <option value="month">Este mes</option>
@@ -534,7 +554,15 @@ export default function AdminPanel() {
 
                     <button
                       className="px-6 py-2 text-white bg-gradient-to-r rounded-xl shadow-lg transition-all duration-300 transform from-slate-500 to-slate-600 hover:from-slate-600 hover:to-slate-700 hover:scale-105"
-                      onClick={() => { setZoneFilter("(todas)"); setLabelFilter([]); setQ(""); }}
+                      onClick={() => { setMode("today"); setZoneFilter("(todas)"); setLabelFilter([]); setQ(""); }}
+                      title="Resetea filtros y muestra solo HOY"
+                    >
+                      Hoy
+                    </button>
+
+                    <button
+                      className="px-6 py-2 text-white bg-gradient-to-r rounded-xl shadow-lg transition-all duration-300 transform from-slate-500 to-slate-600 hover:from-slate-600 hover:to-slate-700 hover:scale-105"
+                      onClick={() => { setZoneFilter("(todas)"); setLabelFilter([]); setQ(""); setMode("30"); }}
                     >
                       Limpiar filtros
                     </button>
@@ -642,6 +670,85 @@ export default function AdminPanel() {
                   data={ventasPorAgente}
                   formatter={(k) => String(k)}
                 />
+
+                {/* =============================== */}
+                {/* Tabla de conversaciones GLOBAL  */}
+                {/* =============================== */}
+                <section className="p-6 rounded-2xl border shadow bg-white/90">
+                  <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-xl font-bold text-slate-800">📚 Conversaciones</h3>
+                    <div className="text-sm text-slate-600">
+                      {`Mostrando ${convsPage.length} de ${totalItems} (pág. ${pageClamped}/${totalPages})`}
+                    </div>
+                  </div>
+
+                  {convsPage.length === 0 ? (
+                    <div className="p-6 text-center rounded-xl border text-slate-500 bg-slate-50 border-slate-200">
+                      Sin resultados para los filtros.
+                    </div>
+                  ) : (
+                    <>
+                      <div className="overflow-auto rounded-xl border">
+                        <table className="table">
+                          <thead>
+                            <tr>
+                              <th className="whitespace-nowrap">ID</th>
+                              <th>Contacto</th>
+                              <th>Asignado</th>
+                              <th>Etiquetas</th>
+                              <th className="whitespace-nowrap">Creada</th>
+                              <th className="whitespace-nowrap">Último msj</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {convsPage.map((c) => (
+                              <tr key={c.id} className="align-top">
+                                <td className="font-mono text-xs">{c.id}</td>
+                                <td>
+                                  <div className="font-medium">{c.contact?.name || "—"}</div>
+                                  <div className="text-xs text-slate-500">{c.contact?.phone || ""}</div>
+                                </td>
+                                <td className="text-sm">
+                                  {c.assignedToName || c.assignedToUid || "—"}
+                                </td>
+                                <td className="text-sm">
+                                  {(Array.isArray(c.labels) ? c.labels : []).join(", ")}
+                                </td>
+                                <td className="text-xs text-slate-600">
+                                  {tsToMs(c.createdAt) ? new Date(tsToMs(c.createdAt)).toLocaleString() : "—"}
+                                </td>
+                                <td className="text-xs text-slate-600">
+                                  {tsToMs(c.lastMessageAt) ? new Date(tsToMs(c.lastMessageAt)).toLocaleString() : "—"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Controles de paginado */}
+                      <div className="flex justify-between items-center mt-4">
+                        <button
+                          className="px-3 py-2 bg-white rounded-lg border hover:bg-slate-50 disabled:opacity-50"
+                          disabled={pageClamped <= 1}
+                          onClick={() => setPage(p => Math.max(1, p - 1))}
+                        >
+                          ← Anterior
+                        </button>
+                        <div className="text-sm text-slate-600">
+                          Página {pageClamped} de {totalPages}
+                        </div>
+                        <button
+                          className="px-3 py-2 bg-white rounded-lg border hover:bg-slate-50 disabled:opacity-50"
+                          disabled={pageClamped >= totalPages}
+                          onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                        >
+                          Siguiente →
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </section>
               </>
             )}
           </div>
