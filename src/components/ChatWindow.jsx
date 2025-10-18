@@ -143,6 +143,7 @@ const SELLER_NAME_MAP = {
   "lunacami00@gmail.com": "Camila",
   "escalantefr.p@gmail.com": "Fernando",
   "julicisneros.89@gmail.com": "Juliana",
+  "christian15366@gmail.com": "Christian",
 };
 
 const prettifyLocal = (email = "") =>
