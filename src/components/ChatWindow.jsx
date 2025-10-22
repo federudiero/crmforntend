@@ -159,10 +159,17 @@ const getSellerDisplayName = (user = {}) => {
   const email = String(user.email || "").toLowerCase().trim();
   const alias = (user.alias || "").trim();
   const name  = (user.name  || "").trim();
-  if (alias) return alias;
-  if (name) return name;
+
+  // 1) Mapa (prioridad absoluta)
   if (email && SELLER_NAME_MAP[email]) return SELLER_NAME_MAP[email];
+
+  // 2) Alias/Nombre solo si NO parecen email
+  if (alias && !alias.includes("@")) return alias;
+  if (name && !name.includes("@")) return name;
+
+  // 3) Fallback: a partir del email (nunca mostrar el correo completo)
   if (email) return prettifyLocal(email);
+
   return "Equipo de Ventas";
 };
 
@@ -764,7 +771,11 @@ export default function ChatWindow({ conversationId, onBack }) {
   // contexto plantillas
   const templateContext = {
     nombre: contact?.name || contact?.fullName || "",
-    vendedor: user?.displayName || user?.email || "",
+    vendedor: getSellerDisplayName({
+      alias: convMeta?.assignedToName || "",
+      name: user?.displayName || user?.name || "",
+      email: user?.email || "",
+    }),
     fecha: new Date().toLocaleDateString(),
     link: window?.location?.href || "",
   };
@@ -1052,7 +1063,11 @@ export default function ChatWindow({ conversationId, onBack }) {
       await sendMessage({
         to: String(conversationId),
         conversationId,
-        sellerName: emailHandle(user?.email || user?.displayName || "Equipo de Ventas"),
+        sellerName: getSellerDisplayName({
+          alias: convMeta?.assignedToName || "",
+          name: user?.displayName || user?.name || "",
+          email: user?.email || "",
+        }),
         ...payload,
         ...(replyTo ? { replyTo: { id: replyTo.id, type: replyTo.type, text: replyTo.textPreview } } : {}),
       });

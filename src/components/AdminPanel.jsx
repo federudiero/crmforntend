@@ -1,7 +1,15 @@
 // src/components/AdminPanel.jsx
 import { useEffect, useMemo, useState } from "react";
-import { db } from "../firebase";
-import { collection, getDocs, doc, getDoc, onSnapshot } from "firebase/firestore";
+import { auth, db } from "../firebase";
+import {
+  addDoc,
+  collection,
+  getDocs,
+  doc,
+  getDoc,
+  onSnapshot,
+  Timestamp,
+} from "firebase/firestore";
 
 import AdminVendors from "./AdminVendors.jsx";
 import LabelsAdmin from "./LabelsAdmin.jsx";
@@ -17,6 +25,14 @@ function ymd(d) {
   const m = String(x.getMonth() + 1).padStart(2, "0");
   const dd = String(x.getDate()).padStart(2, "0");
   return `${x.getFullYear()}-${m}-${dd}`;
+}
+function parseLocalYMD(s) {
+  try {
+    const [y, m, d] = String(s).split("-").map(Number);
+    return new Date(y, m - 1, d);
+  } catch {
+    return new Date(s);
+  }
 }
 function tsToMs(ts) {
   if (!ts) return 0;
@@ -107,6 +123,141 @@ function calcOnline(userDoc) {
 }
 
 /* =============================================================== */
+function cleanAgentLabel(s) {
+  const val = String(s || "").trim();
+  if (!val) return "";
+  if (val.includes("@")) {
+    const local = val.split("@")[0];
+    const name = local.replace(/[._-]+/g, " ").trim();
+    return name.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+  }
+  return val;
+}
+
+/* =============================================================== */
+/* NUEVO: Formulario para asignar tareas a agentes (Admin → Agenda) */
+function AdminAssignTask({ vendors }) {
+  const [vendorOptions, setVendorOptions] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({
+    userId: "",
+    titulo: "",
+    nota: "",
+    fecha: "", // YYYY-MM-DD
+    hora: "",  // HH:MM
+  });
+
+  useEffect(() => {
+    // Mapear vendors (wabaNumbers) a opciones de selección: uid + label visible
+    const arr = [];
+    for (const v of vendors || []) {
+      const uid = v.ownerUid || v.userUid || v.uid || v.id;
+      const label = v.alias || v.owner || v.phone || uid;
+      if (uid) arr.push({ uid, label });
+    }
+    arr.sort((a, b) => a.label.localeCompare(b.label));
+    setVendorOptions(arr);
+  }, [vendors]);
+
+  function toLocalTimestamp(ymd, hm) {
+    if (!ymd) return Timestamp.fromDate(new Date());
+    const [y, m, d] = ymd.split("-").map(Number);
+    let H = 9, M = 0; // por defecto 09:00
+    if (hm && /^\d{2}:\d{2}$/.test(hm)) {
+      [H, M] = hm.split(":").map(Number);
+    }
+    const js = new Date(y, (m || 1) - 1, d || 1, H || 0, M || 0, 0);
+    return Timestamp.fromDate(js);
+  }
+
+  async function handleCreate(e) {
+    e?.preventDefault?.();
+    if (!form.userId) return alert("Elegí un agente.");
+    if (!form.titulo.trim()) return alert("Escribí un título.");
+    setSaving(true);
+    try {
+      await addDoc(collection(db, "tareas"), {
+        userId: form.userId,
+        titulo: form.titulo.trim(),
+        nota: form.nota?.trim() || "",
+        fecha: toLocalTimestamp(form.fecha, form.hora),
+        done: false,
+        createdBy: auth?.currentUser?.uid || null,
+        createdAt: Timestamp.now(),
+      });
+      setForm({ userId: "", titulo: "", nota: "", fecha: "", hora: "" });
+      alert("Tarea creada y asignada 🙌");
+    } catch (err) {
+      console.error(err);
+      alert("No se pudo crear la tarea.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="p-6 rounded-2xl border shadow bg-white/95 mb-6">
+      <h3 className="text-lg font-bold text-slate-800 mb-3">🗓️ Asignar tarea a un agente</h3>
+      <form onSubmit={handleCreate} className="grid gap-3 md:grid-cols-12">
+        <select
+          className="p-2 border rounded md:col-span-3"
+          value={form.userId}
+          onChange={(e)=>setForm(f=>({...f, userId:e.target.value}))}
+          required
+        >
+          <option value="">Asignar a…</option>
+          {vendorOptions.map(v => (
+            <option key={v.uid} value={v.uid}>{v.label}</option>
+          ))}
+        </select>
+
+        <input
+          className="p-2 border rounded md:col-span-3"
+          placeholder="Título de la tarea"
+          value={form.titulo}
+          onChange={(e)=>setForm(f=>({...f, titulo:e.target.value}))}
+          required
+        />
+
+        <input
+          type="date"
+          className="p-2 border rounded md:col-span-2"
+          value={form.fecha}
+          onChange={(e)=>setForm(f=>({...f, fecha:e.target.value}))}
+          required
+        />
+        <input
+          type="time"
+          className="p-2 border rounded md:col-span-2"
+          value={form.hora}
+          onChange={(e)=>setForm(f=>({...f, hora:e.target.value}))}
+        />
+
+        <input
+          className="p-2 border rounded md:col-span-12"
+          placeholder="Nota (opcional)"
+          value={form.nota}
+          onChange={(e)=>setForm(f=>({...f, nota:e.target.value}))}
+        />
+
+        <div className="md:col-span-12">
+          <button
+            disabled={saving}
+            className="px-4 py-2 rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-70"
+          >
+            {saving ? "Creando…" : "Crear tarea"}
+          </button>
+        </div>
+      </form>
+      <p className="text-xs text-slate-500 mt-2">
+        Tip: La tarea aparecerá automáticamente en la <b>Agenda</b> del agente (porque la Agenda filtra <code>tareas</code> por <code>userId</code> y <code>fecha</code>).
+      </p>
+    </section>
+  );
+}
+
+/* =============================================================== */
+/* ============================ MAIN ============================= */
 export default function AdminPanel() {
   // Pestañas
   const [tab, setTab] = useState("dashboard");
@@ -121,7 +272,7 @@ export default function AdminPanel() {
   const [usersByUid, setUsersByUid] = useState({});
 
   // Filtros globales (sin agente)
-  const [mode, setMode] = useState("7"); // ← ahora también soporta "today"
+  const [mode, setMode] = useState("7"); // ← soporta "today"
   const [from, setFrom] = useState(ymd(startOfDay(new Date(Date.now() - 6 * 86400000))));
   const [to, setTo] = useState(ymd(new Date()));
   const [zoneFilter, setZoneFilter] = useState("(todas)");
@@ -144,7 +295,7 @@ export default function AdminPanel() {
 
   // Carga datasets del dashboard + escucha users para presencia
   useEffect(() => {
-    if (tab !== "dashboard") return;
+    if (tab !== "dashboard" && tab !== "tasks") return; // vendors y users nos sirven en ambas
     setLoading(true);
 
     let unsubUsers = null;
@@ -182,7 +333,7 @@ export default function AdminPanel() {
     return () => { try { unsubUsers && unsubUsers(); } catch {} };
   }, [tab]);
 
-  // Períodos rápidos (agrego "today")
+  // Períodos rápidos
   useEffect(() => {
     if (mode === "today") {
       const now = new Date();
@@ -205,7 +356,7 @@ export default function AdminPanel() {
   }, [mode]);
 
   // Derivados
-  const range = useMemo(() => [+startOfDay(new Date(from)), +endOfDay(new Date(to))], [from, to]);
+  const range = useMemo(() => [+startOfDay(parseLocalYMD(from)), +endOfDay(parseLocalYMD(to))], [from, to]);
 
   const convsInRange = useMemo(() => {
     const [a, b] = range;
@@ -222,9 +373,23 @@ export default function AdminPanel() {
       const z = (v.zone || "Sin zona").trim();
       if (!map.has(z)) map.set(z, { uids: new Set(), names: new Set() });
       if (v.ownerUid) map.get(z).uids.add(v.ownerUid);
+      if (v.userUid) map.get(z).uids.add(v.userUid);
+      if (v.uid)      map.get(z).uids.add(v.uid);
+      if (v.id)       map.get(z).uids.add(v.id);
       if (v.alias) map.get(z).names.add(v.alias);
       if (v.owner) map.get(z).names.add(v.owner);
       if (v.phone) map.get(z).names.add(v.phone);
+    }
+    return map;
+  }, [vendors]);
+
+  // Índice uid → nombre visible (alias/owner/phone)
+  const vendorNameByUid = useMemo(() => {
+    const map = {};
+    for (const v of vendors) {
+      const uid = v.ownerUid || v.userUid || v.uid || v.id;
+      const name = v.alias || v.owner || v.phone || "";
+      if (uid && name) map[uid] = name;
     }
     return map;
   }, [vendors]);
@@ -285,6 +450,15 @@ export default function AdminPanel() {
   const convsPage  = convsFiltered.slice(sliceStart, sliceEnd);
 
   // KPIs globales
+  const getAgentName = (c) => {
+    const uid = c.assignedToUid || "";
+    const u = usersByUid[uid];
+    const userName = u?.alias || u?.displayName || u?.name || "";
+    const vendorName = vendorNameByUid[uid] || "";
+    const assignedName = cleanAgentLabel(c.assignedToName || "");
+    const name = userName || vendorName || assignedName;
+    return name || (uid ? uid : "Sin asignar");
+  };
   const kpis = useMemo(() => {
     const total = convsFiltered.length;
     const sinAsignar = convsFiltered.filter(c => !c.assignedToUid && !c.assignedToName).length;
@@ -297,12 +471,12 @@ export default function AdminPanel() {
 
     const porAgente = {};
     for (const c of convsFiltered) {
-      const k = c.assignedToName || c.assignedToUid || "Sin asignar";
+      const k = getAgentName(c);
       porAgente[k] = (porAgente[k] || 0) + 1;
     }
 
     return { total, sinAsignar, porEtiqueta, porAgente };
-  }, [convsFiltered]);
+  }, [convsFiltered, usersByUid, vendorNameByUid]);
 
   // Series y tops
   const seriePorDia = useMemo(() => {
@@ -333,14 +507,14 @@ export default function AdminPanel() {
     for (const c of convsFiltered) {
       const ls = Array.isArray(c.labels) ? c.labels : [];
       if (!ls.includes("vendido")) continue;
-      const key = c.assignedToName || c.assignedToUid || "Sin asignar";
+      const key = getAgentName(c);
       map.set(key, (map.get(key) || 0) + 1);
     }
     return Array.from(map.entries())
       .sort((a, b) => b[1] - a[1])
       .slice(0, 50)
       .map(([k, v]) => ({ k, v }));
-  }, [convsFiltered]);
+  }, [convsFiltered, usersByUid, vendorNameByUid]);
 
   // Vendedores activos / por zona
   const vendedoresActivos = useMemo(() => vendors.filter(v => !!v.active), [vendors]);
@@ -446,7 +620,7 @@ export default function AdminPanel() {
           </div>
         </section>
 
-        {/* Tabs (sin Dashboard Pro) */}
+        {/* Tabs */}
         <div className="p-2 rounded-2xl border shadow-lg backdrop-blur-sm bg-white/80 border-white/20">
           <div className="flex flex-wrap gap-1">
             {[
@@ -489,7 +663,7 @@ export default function AdminPanel() {
 
             {!loading && (
               <>
-                {/* Controles / Filtros (globales, sin agente) */}
+                {/* Controles / Filtros */}
                 <div className="p-6 rounded-2xl border shadow-lg backdrop-blur-sm bg-white/90 border-white/20">
                   <div className="flex flex-wrap gap-4 items-end">
                     <div className="space-y-2">
@@ -596,7 +770,6 @@ export default function AdminPanel() {
                       )}
                     </div>
 
-                    {/* Sin filtro de Agentes aquí */}
                     <div className="space-y-2 opacity-60">
                       <label className="text-sm font-semibold text-slate-700">Agentes</label>
                       <div className="px-4 py-3 text-sm rounded-xl border border-dashed border-slate-300 bg-slate-50 text-slate-500">
@@ -647,7 +820,7 @@ export default function AdminPanel() {
                   }
                 />
 
-                {/* Distribución por agente (estadística) */}
+                {/* Distribución por agente */}
                 <ListStatCard
                   title="👥 Conversaciones por agente"
                   accent="#7c3aed"
@@ -671,9 +844,7 @@ export default function AdminPanel() {
                   formatter={(k) => String(k)}
                 />
 
-                {/* =============================== */}
-                {/* Tabla de conversaciones GLOBAL  */}
-                {/* =============================== */}
+                {/* Tabla de conversaciones */}
                 <section className="p-6 rounded-2xl border shadow bg-white/90">
                   <div className="flex justify-between items-center mb-4">
                     <h3 className="text-xl font-bold text-slate-800">📚 Conversaciones</h3>
@@ -709,7 +880,7 @@ export default function AdminPanel() {
                                   <div className="text-xs text-slate-500">{c.contact?.phone || ""}</div>
                                 </td>
                                 <td className="text-sm">
-                                  {c.assignedToName || c.assignedToUid || "—"}
+                                  {getAgentName(c)}
                                 </td>
                                 <td className="text-sm">
                                   {(Array.isArray(c.labels) ? c.labels : []).join(", ")}
@@ -726,7 +897,6 @@ export default function AdminPanel() {
                         </table>
                       </div>
 
-                      {/* Controles de paginado */}
                       <div className="flex justify-between items-center mt-4">
                         <button
                           className="px-3 py-2 bg-white rounded-lg border hover:bg-slate-50 disabled:opacity-50"
@@ -754,7 +924,14 @@ export default function AdminPanel() {
           </div>
         )}
 
-        {tab === "tasks" && <TasksPanel />}
+        {tab === "tasks" && (
+          <>
+            {/* NUEVO: Asignación de tareas a agentes (se conecta con la Agenda) */}
+            <AdminAssignTask vendors={vendedoresActivos} />
+            {/* Panel de tareas existente (no se toca) */}
+            <TasksPanel />
+          </>
+        )}
 
         {/* Vista de detalle del vendedor */}
         {tab === "vendorDetail" && selectedVendorUid && (

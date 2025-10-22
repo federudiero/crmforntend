@@ -335,13 +335,19 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
     return Math.max(1, Math.round((b - a) / 86400000) + 1);
   }, [from, to]);
 
-  /* ========== ⏱️ Tiempo de respuesta ========== */
+  /* ========== ⏱️ Tiempo de respuesta (FIX: ordenar por timestamp con fallback) ========== */
   useEffect(() => {
     let cancelled = false;
 
     // timestamp robusto por mensaje
     const getMsgTime = (m) =>
-      tsToMs(m.createdAt || m.sentAt || m.timestamp || m.ts || m.created_at);
+      tsToMs(
+        m?.timestamp       // ✅ primero timestamp (es el que guarda el backend)
+        || m?.createdAt
+        || m?.sentAt
+        || m?.ts
+        || m?.created_at
+      );
 
     const isInbound = (m, c) =>
       m?.direction === "in" ||
@@ -353,10 +359,9 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
       m?.type === "incoming";
 
     const isOutboundByVendor = (m, c) => {
-      const uid = m?.senderUid || m?.userUid || m?.ownerUid || m?.agentUid;
+      const uid = m?.senderUid || m?.userUid || m?.ownerUid || m?.agentUid || m?.createdBy;
       const outbound =
         m?.direction === "out" ||
-        m?.from === c?.businessDisplay ||
         m?.authorType === "agent" ||
         m?.isAgent === true ||
         m?.sender === "agent" ||
@@ -366,20 +371,38 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
     };
 
     async function fetchMsgsForConversation(c) {
-      // 1) Subcolección estándar
+      // 1) Subcolección estándar: intentar timestamp, luego createdAt
       try {
         const ref1 = collection(db, "conversations", c.id, "messages");
-        const q1 = query(ref1, orderBy("createdAt", "asc"));
-        const snap1 = await getDocs(q1);
-        if (!snap1.empty) return snap1.docs.map(d => ({ id: d.id, ...d.data() }));
+        let arr = [];
+        try {
+          const s = await getDocs(query(ref1, orderBy("timestamp", "asc"))); // ✅
+          s.forEach(d => arr.push({ id: d.id, ...d.data() }));
+        } catch {
+          const s = await getDocs(query(ref1, orderBy("createdAt", "asc")));   // fallback
+          s.forEach(d => arr.push({ id: d.id, ...d.data() }));
+        }
+        if (arr.length) {
+          arr.sort((a,b)=>getMsgTime(a)-getMsgTime(b));
+          return arr;
+        }
       } catch {}
 
       // 2) Top-level messages con conversationId
       try {
         const ref2 = collection(db, "messages");
-        const q2 = query(ref2, where("conversationId", "==", c.id), orderBy("createdAt", "asc"));
-        const snap2 = await getDocs(q2);
-        if (!snap2.empty) return snap2.docs.map(d => ({ id: d.id, ...d.data() }));
+        let arr2 = [];
+        try {
+          const s2 = await getDocs(query(ref2, where("conversationId", "==", c.id), orderBy("timestamp", "asc"))); // ✅
+          s2.forEach(d => arr2.push({ id: d.id, ...d.data() }));
+        } catch {
+          const s2 = await getDocs(query(ref2, where("conversationId", "==", c.id), orderBy("createdAt", "asc")));  // fallback
+          s2.forEach(d => arr2.push({ id: d.id, ...d.data() }));
+        }
+        if (arr2.length) {
+          arr2.sort((a,b)=>getMsgTime(a)-getMsgTime(b));
+          return arr2;
+        }
       } catch {}
 
       // 3) Resolver por array de ids en la conversación (en chunks de 10)
@@ -469,10 +492,10 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
               {vendor?.owner && <> · Nombre: <b>{vendor.owner}</b></>}
               {" · Estado: "}
               <span
-                className={`px-2 py-0.5 text-xs rounded-full ${isOnline ? "text-green-700 bg-green-100" : "text-red-600 bg-red-100"}`}
+                className={`px-2 py-0.5 text-xs rounded-full ${calcOnline(vendor) ? "text-green-700 bg-green-100" : "text-red-600 bg-red-100"}`}
                 title={vendor?.lastSeen ? `Visto: ${new Date(tsToMs(vendor.lastSeen)).toLocaleString()}` : undefined}
               >
-                {isOnline ? "Online" : "Offline"}
+                {calcOnline(vendor) ? "Online" : "Offline"}
               </span>
               {vendor?.lastSeen && (
                 <> · Visto hace <span className="font-mono">{timeAgo(vendor.lastSeen)}</span></>
@@ -649,7 +672,7 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
             <div className="text-sm text-slate-600">{ventasConvs.length} ventas en el período</div>
           </div>
           {ventasConvs.length === 0 ? (
-            <div className="p-6 text-center rounded-xl border text-slate-500 bg-slate-50 border-slate-200">
+            <div className="p-6 text-center rounded-2xl border text-slate-500 bg-slate-50 border-slate-200">
               Sin ventas en el período.
             </div>
           ) : (
@@ -662,7 +685,7 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
                 ))
                 .slice(0, 20)
                 .map((c) => (
-                  <li key={c.id} className="p-3 bg-white rounded-xl border hover:bg-slate-50 flex items-center justify-between">
+                  <li key={c.id} className="flex justify-between items-center p-3 bg-white rounded-xl border hover:bg-slate-50">
                     <div>
                       <div className="font-medium">{c.contact?.name || "—"}</div>
                       <div className="text-xs text-slate-500">{c.id}</div>
@@ -677,7 +700,7 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
                           return ms ? new Date(ms).toLocaleString() : "—";
                         })()}
                       </div>
-                      <span className="mt-1 inline-block px-2 py-1 text-xs rounded-full bg-green-100 text-green-700">Vendido</span>
+                      <span className="inline-block px-2 py-1 mt-1 text-xs text-green-700 bg-green-100 rounded-full">Vendido</span>
                     </div>
                   </li>
                 ))}
@@ -703,7 +726,7 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
             }, {});
             const entries = Object.entries(counts);
             return entries.length === 0 ? (
-              <div className="p-6 text-center rounded-xl border text-slate-500 bg-slate-50 border-slate-200">
+              <div className="p-6 text-center rounded-2xl border text-slate-500 bg-slate-50 border-slate-200">
                 Sin etiquetas en el período.
               </div>
             ) : (
@@ -731,12 +754,12 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
           {loading ? (
             <div className="py-10 text-center text-slate-600">Cargando…</div>
           ) : convsPage.length === 0 ? (
-            <div className="p-6 text-center rounded-xl border text-slate-500 bg-slate-50 border-slate-200">
+            <div className="p-6 text-center rounded-2xl border text-slate-500 bg-slate-50 border-slate-200">
               Sin resultados para los filtros.
             </div>
           ) : (
             <>
-              <div className="overflow-auto rounded-xl border">
+              <div className="overflow-auto rounded-2xl border">
                 <table className="table">
                   <thead>
                     <tr>
