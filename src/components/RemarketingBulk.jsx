@@ -1,9 +1,3 @@
-// src/components/RemarketingBulk.jsx
-// Módulo de remarketing por WhatsApp con:
-// - Plantilla fija: promo_hogarcril_combos (es_AR)
-// - Cada vendedor envía desde su número asignado (resuelto en backend por email)
-// - Opt-in obligatorio, delay configurable, selección por etiquetas o manual
-
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { db } from "../firebase";
 import { collection, query, where, orderBy, limit, getDocs } from "firebase/firestore";
@@ -13,7 +7,10 @@ import { getAuth } from "firebase/auth";
 // ---------- Config ----------
 const LOCKED_LANG = "es_AR";
 const LOCKED_TEMPLATE = "promo_hogarcril_combos";
-const BASE = import.meta.env.VITE_BACKEND_URL || ""; // ej: https://crmbackend-chi.vercel.app
+const BASE =
+  import.meta.env.VITE_BACKEND_URL ||
+  import.meta.env.VITE_API_BASE ||
+  "";
 const api = (p) => `${BASE}${p}`;
 
 // ---------- Helpers ----------
@@ -47,7 +44,7 @@ async function authFetch(path, options = {}) {
 
 // ---------- API ----------
 async function sendTemplate({ phone, components = [] }) {
-  const resp = await authFetch("/api/waba/send-template", {
+  const resp = await authFetch("/api/send-template", {
     method: "POST",
     body: JSON.stringify({ phone, components }),
   });
@@ -59,7 +56,6 @@ async function sendTemplate({ phone, components = [] }) {
 }
 
 export default function RemarketingBulk() {
-  // Plantillas (solo la bloqueada aparecerá si está aprobada)
   const [templatesRaw, setTemplatesRaw] = useState([]);
   const [senderInfo, setSenderInfo] = useState(null);
 
@@ -67,33 +63,31 @@ export default function RemarketingBulk() {
     let cancelled = false;
     (async () => {
       try {
-        const r = await authFetch("/api/waba/templates");
+        const r = await authFetch("/api/templates");
         const t = await r.text();
         const data = t ? JSON.parse(t) : {};
         const arr = Array.isArray(data) ? data : (data?.templates || data?.data || []);
         if (!cancelled) setTemplatesRaw(arr || []);
       } catch (e) {
-        console.error("fetch /api/waba/templates error:", e);
+        console.error("fetch /api/templates error:", e);
         if (!cancelled) setTemplatesRaw([]);
       }
     })();
     return () => { cancelled = true; };
   }, []);
 
-  // Info del número desde el que se enviará (Phone ID resuelto por backend con el email del vendedor)
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const r = await authFetch("/api/waba/sender");
+        const r = await authFetch("/api/sender");
         const data = await r.json();
         if (!cancelled && r.ok) setSenderInfo(data);
-      } catch (_) {}
+      } catch {}
     })();
     return () => { cancelled = true; };
   }, []);
 
-  // Filtrar SOLO la plantilla bloqueada y aprobada
   const approvedTemplates = useMemo(() => {
     return (templatesRaw || []).filter((t) => {
       const status = String(t?.status).toUpperCase() === "APPROVED";
@@ -112,7 +106,7 @@ export default function RemarketingBulk() {
   const varCount = countTemplateVars(tplBody);
 
   // ---------- Variables ----------
-  const [mode, setMode] = useState("global"); // global para todos, o csv por fila (solo en manual)
+  const [mode, setMode] = useState("global");
   const [vars, setVars] = useState(() => Array.from({ length: Math.max(varCount, 1) }, () => ""));
   useEffect(() => { setVars(Array.from({ length: Math.max(varCount, 1) }, () => "")); }, [varCount]);
 
@@ -126,7 +120,6 @@ export default function RemarketingBulk() {
   const [tagPhonesMeta, setTagPhonesMeta] = useState([]);
   const [tagPhonesLoading, setTagPhonesLoading] = useState(false);
 
-  // Manual
   const [rawPhones, setRawPhones] = useState("");
   const numbers = useMemo(() => {
     const rows = rawPhones.split(/\n|,|;|\s+/).map((x) => x.trim()).filter(Boolean);
@@ -134,7 +127,6 @@ export default function RemarketingBulk() {
     return Array.from(new Set(normed));
   }, [rawPhones]);
 
-  // CSV por fila (solo cuando destMode === 'manual' y mode === 'csv')
   const [csvPreview, setCsvPreview] = useState([]);
   const fileInputRef = useRef(null);
   const onCsvUpload = async (file) => {
@@ -238,12 +230,10 @@ export default function RemarketingBulk() {
     return () => { cancelled = true; };
   }, [selectedLabels]);
 
-  // Evitar CSV en modo etiquetas
   useEffect(() => { if (destMode === "tags" && mode === "csv") setMode("global"); }, [destMode, mode]);
 
   const totalToSend = useMemo(() => destMode === "tags" ? tagPhones.length : (mode === "global" ? numbers.length : csvPreview.length), [destMode, tagPhones, mode, numbers, csvPreview]);
 
-  // Si la plantilla no está disponible, bloquear envío
   const hasLockedTemplate = Boolean(tpl);
 
   const canSend = useMemo(() => {
@@ -384,7 +374,7 @@ export default function RemarketingBulk() {
               <input type="file" accept=".csv" ref={fileInputRef} onChange={(e) => onCsvUpload(e.target.files?.[0])} />
               <button type="button" className="px-3 py-1 rounded border" onClick={() => fileInputRef.current?.click()}>Cargar CSV</button>
             </div>
-            <p className="text-xs text-gray-600">Formato: <code>phone,var1,var2,...</code> — Ej: <code>+5491122334455,Fede,Ayelén · Hogar Cril,"Impermeabilizante 20L + Rodillo + Venda $49.900\nLátex 20L + 2 Enduidos $39.900"</code></p>
+            <p className="text-xs text-gray-600">Formato: <code>phone,var1,var2,...</code></p>
             {csvPreview.length > 0 && (
               <div className="overflow-auto max-h-40 text-sm rounded border">
                 <table className="w-full">
@@ -425,7 +415,6 @@ export default function RemarketingBulk() {
 
         {destMode === "tags" ? (
           <div className="space-y-2">
-            {/* Etiquetas */}
             <LabelsBlock
               labelsLoading={labelsLoading}
               labelsError={labelsError}
@@ -521,7 +510,7 @@ export default function RemarketingBulk() {
 
       <div className="mt-4 space-y-1 text-xs text-gray-500">
         <p>💡 Tip: si recibís <code>429 Too Many Requests</code>, aumentá el delay entre envíos o dividí la lista en tandas.</p>
-        <p>🔒 Cumplimiento: fuera de 24h de la última interacción del usuario, <b>solo</b> se puede enviar <i>template messages</i> aprobados, y solo a contactos con opt-in. Dentro de 24h podés responder con sesión.</p>
+        <p>🔒 Cumplimiento: fuera de 24h de la última interacción del usuario, <b>solo</b> se puede enviar <i>template messages</i> aprobados, y solo a contactos con opt-in.</p>
       </div>
     </div>
   );
