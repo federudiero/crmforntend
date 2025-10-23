@@ -34,6 +34,38 @@ function parseLocalYMD(s) {
     return new Date(s);
   }
 }
+// NUEVO: Zona horaria fija de negocio
+const BUSINESS_TZ = "America/Argentina/Cordoba";
+function ymdTZ(d) {
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: BUSINESS_TZ,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date(d));
+  } catch {
+    return ymd(d);
+  }
+}
+function startOfDayTZ(d) {
+  try {
+    const s = ymdTZ(d);
+    const [y, m, dd] = s.split("-").map(Number);
+    // GMT-3 → medianoche local equivale a 03:00 UTC
+    return new Date(Date.UTC(y, (m || 1) - 1, dd || 1, 3, 0, 0, 0));
+  } catch {
+    return startOfDay(d);
+  }
+}
+function endOfDayTZ(d) {
+  try {
+    const start = startOfDayTZ(d);
+    return new Date(start.getTime() + 86400000 - 1);
+  } catch {
+    return endOfDay(d);
+  }
+}
 function tsToMs(ts) {
   if (!ts) return 0;
   if (typeof ts === "number") return ts;
@@ -273,8 +305,8 @@ export default function AdminPanel() {
 
   // Filtros globales (sin agente)
   const [mode, setMode] = useState("7"); // ← soporta "today"
-  const [from, setFrom] = useState(ymd(startOfDay(new Date(Date.now() - 6 * 86400000))));
-  const [to, setTo] = useState(ymd(new Date()));
+  const [from, setFrom] = useState(ymdTZ(new Date(Date.now() - 6 * 86400000)));
+  const [to, setTo] = useState(ymdTZ(new Date()));
   const [zoneFilter, setZoneFilter] = useState("(todas)");
   const [labelFilter, setLabelFilter] = useState([]);
   const [q, setQ] = useState("");
@@ -337,26 +369,29 @@ export default function AdminPanel() {
   useEffect(() => {
     if (mode === "today") {
       const now = new Date();
-      setFrom(ymd(startOfDay(now)));
-      setTo(ymd(now));
+      setFrom(ymdTZ(now));
+      setTo(ymdTZ(now));
     } else if (mode === "7") {
       const end = new Date();
-      const start = startOfDay(new Date(Date.now() - 6 * 86400000));
-      setFrom(ymd(start)); setTo(ymd(end));
+      const start = new Date(Date.now() - 6 * 86400000);
+      setFrom(ymdTZ(start)); setTo(ymdTZ(end));
     } else if (mode === "30") {
       const end = new Date();
-      const start = startOfDay(new Date(Date.now() - 29 * 86400000));
-      setFrom(ymd(start)); setTo(ymd(end));
+      const start = new Date(Date.now() - 29 * 86400000);
+      setFrom(ymdTZ(start)); setTo(ymdTZ(end));
     } else if (mode === "month") {
       const now = new Date();
-      const start = startOfDay(new Date(now.getFullYear(), now.getMonth(), 1));
-      const end = endOfDay(new Date(now.getFullYear(), now.getMonth() + 1, 0));
-      setFrom(ymd(start)); setTo(ymd(end));
+      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+      const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      setFrom(ymdTZ(start)); setTo(ymdTZ(end));
     }
   }, [mode]);
 
   // Derivados
-  const range = useMemo(() => [+startOfDay(parseLocalYMD(from)), +endOfDay(parseLocalYMD(to))], [from, to]);
+  const range = useMemo(() => [
+    +startOfDayTZ(parseLocalYMD(from)),
+    +endOfDayTZ(parseLocalYMD(to))
+  ], [from, to]);
 
   const convsInRange = useMemo(() => {
     const [a, b] = range;
@@ -482,10 +517,10 @@ export default function AdminPanel() {
   const seriePorDia = useMemo(() => {
     const map = new Map();
     const [a, b] = range;
-    for (let t = a; t <= b; t += 86400000) map.set(ymd(t), 0);
+    for (let t = a; t <= b; t += 86400000) map.set(ymdTZ(new Date(t)), 0);
     for (const c of convsFiltered) {
       const t = tsToMs(c.lastMessageAt) || tsToMs(c.createdAt);
-      const key = ymd(startOfDay(t));
+      const key = ymdTZ(new Date(t));
       if (map.has(key)) map.set(key, (map.get(key) || 0) + 1);
     }
     return Array.from(map.entries()).map(([k, v]) => ({ k, v }));
