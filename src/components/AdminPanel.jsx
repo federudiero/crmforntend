@@ -9,6 +9,7 @@ import {
   getDoc,
   onSnapshot,
   Timestamp,
+  serverTimestamp 
 } from "firebase/firestore";
 
 import AdminVendors from "./AdminVendors.jsx";
@@ -16,6 +17,7 @@ import LabelsAdmin from "./LabelsAdmin.jsx";
 import TemplatesPanel from "./TemplatesPanel.jsx";
 import TasksPanel from "./TasksPanel.jsx";
 import VendorDetailPanel from "./VendorDetailPanel.jsx";
+import ConversacionesHoy from "./ConversacionesHoy.jsx";
 
 /* ========================= Helpers fecha ========================= */
 function startOfDay(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; }
@@ -202,37 +204,49 @@ function AdminAssignTask({ vendors }) {
     return Timestamp.fromDate(js);
   }
 
-  async function handleCreate(e) {
-    e?.preventDefault?.();
-    if (!form.userId) return alert("Elegí un agente.");
-    if (!form.titulo.trim()) return alert("Escribí un título.");
-    setSaving(true);
-    try {
-      await addDoc(collection(db, "tareas"), {
-        userId: form.userId,
-        titulo: form.titulo.trim(),
-        nota: form.nota?.trim() || "",
-        fecha: toLocalTimestamp(form.fecha, form.hora),
-        done: false,
-        createdBy: auth?.currentUser?.uid || null,
-        createdAt: Timestamp.now(),
-      });
-      setForm({ userId: "", titulo: "", nota: "", fecha: "", hora: "" });
-      alert("Tarea creada y asignada 🙌");
-    } catch (err) {
-      console.error(err);
-      alert("No se pudo crear la tarea.");
-    } finally {
-      setSaving(false);
-    }
+ // AdminPanel.jsx → dentro de AdminAssignTask
+async function handleCreate(e) {
+  e?.preventDefault?.();
+
+  if (!form.userId) {
+    alert("Elegí un agente.");
+    return;
+  }
+  if (!form.titulo.trim()) {
+    alert("Escribí un título.");
+    return;
   }
 
+  setSaving(true);
+  try {
+    await addDoc(collection(db, "tareas"), {
+      userId: form.userId,                           // UID del agente
+      titulo: form.titulo.trim(),
+      nota: form.nota?.trim() || "",
+      fecha: toLocalTimestamp(form.fecha, form.hora),// Timestamp local (día+hora)
+      fechaStr: form.fecha || null,                  // ← string yyyy-MM-dd para agenda
+      done: false,
+      createdBy: auth?.currentUser?.uid || null,
+      createdAt: serverTimestamp(),                  // ← timestamps de servidor
+      updatedAt: serverTimestamp(),
+    });
+
+    setForm({ userId: "", titulo: "", nota: "", fecha: "", hora: "" });
+    alert("Tarea creada y asignada 🙌");
+  } catch (err) {
+    console.error("create task failed:", err?.code, err?.message, err);
+    alert("No se pudo crear la tarea.");
+  } finally {
+    setSaving(false);
+  }
+}
+
   return (
-    <section className="p-6 rounded-2xl border shadow bg-white/95 mb-6">
-      <h3 className="text-lg font-bold text-slate-800 mb-3">🗓️ Asignar tarea a un agente</h3>
+    <section className="p-6 mb-6 rounded-2xl border shadow bg-white/95">
+      <h3 className="mb-3 text-lg font-bold text-slate-800">🗓️ Asignar tarea a un agente</h3>
       <form onSubmit={handleCreate} className="grid gap-3 md:grid-cols-12">
         <select
-          className="p-2 border rounded md:col-span-3"
+          className="p-2 rounded border md:col-span-3"
           value={form.userId}
           onChange={(e)=>setForm(f=>({...f, userId:e.target.value}))}
           required
@@ -244,7 +258,7 @@ function AdminAssignTask({ vendors }) {
         </select>
 
         <input
-          className="p-2 border rounded md:col-span-3"
+          className="p-2 rounded border md:col-span-3"
           placeholder="Título de la tarea"
           value={form.titulo}
           onChange={(e)=>setForm(f=>({...f, titulo:e.target.value}))}
@@ -253,20 +267,20 @@ function AdminAssignTask({ vendors }) {
 
         <input
           type="date"
-          className="p-2 border rounded md:col-span-2"
+          className="p-2 rounded border md:col-span-2"
           value={form.fecha}
           onChange={(e)=>setForm(f=>({...f, fecha:e.target.value}))}
           required
         />
         <input
           type="time"
-          className="p-2 border rounded md:col-span-2"
+          className="p-2 rounded border md:col-span-2"
           value={form.hora}
           onChange={(e)=>setForm(f=>({...f, hora:e.target.value}))}
         />
 
         <input
-          className="p-2 border rounded md:col-span-12"
+          className="p-2 rounded border md:col-span-12"
           placeholder="Nota (opcional)"
           value={form.nota}
           onChange={(e)=>setForm(f=>({...f, nota:e.target.value}))}
@@ -275,13 +289,13 @@ function AdminAssignTask({ vendors }) {
         <div className="md:col-span-12">
           <button
             disabled={saving}
-            className="px-4 py-2 rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-70"
+            className="px-4 py-2 text-white bg-indigo-600 rounded hover:bg-indigo-700 disabled:opacity-70"
           >
             {saving ? "Creando…" : "Crear tarea"}
           </button>
         </div>
       </form>
-      <p className="text-xs text-slate-500 mt-2">
+      <p className="mt-2 text-xs text-slate-500">
         Tip: La tarea aparecerá automáticamente en la <b>Agenda</b> del agente (porque la Agenda filtra <code>tareas</code> por <code>userId</code> y <code>fecha</code>).
       </p>
     </section>
@@ -975,6 +989,19 @@ export default function AdminPanel() {
             onBack={() => setTab("dashboard")}
           />
         )}
+ <div className="p-4">
+      <ConversacionesHoy
+        collectionName="conversations"
+        adsConfig={{
+          phoneIds: ["768483333020913", /* otros phoneIds de campañas */],
+          labelsMatch: ["ads", "publicidad", "meta_ads"],
+          considerUTM: true,
+        }}
+        pageLimit={500}
+      />
+    </div>
+
+
       </div>
     </div>
   );

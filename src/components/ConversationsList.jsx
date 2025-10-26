@@ -62,79 +62,53 @@ export default function ConversationsList({ activeId, onSelect }) {
   const { user } = useAuthState();
 
   // ======= Estilos locales para la animación de "nuevo entrante" =======
-  // (sin depender de tailwind.config)
   const AttentionStyles = (
     <style>{`
-      .new-reply {
-        position: relative;
-      }
-      /* Barra izquierda que "late" */
+      .new-reply { position: relative; }
       .new-reply::before {
         content: "";
-        position: absolute;
-        left: 0;
-        top: 0;
-        bottom: 0;
-        width: 4px;
-        background: #16a34a; /* green-600 */
-        animation: pulseBar 1.15s ease-in-out infinite;
-        border-top-left-radius: 4px;
-        border-bottom-left-radius: 4px;
+        position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+        background: #16a34a; animation: pulseBar 1.15s ease-in-out infinite;
+        border-top-left-radius: 4px; border-bottom-left-radius: 4px;
       }
-      @keyframes pulseBar {
-        0%,100% { opacity: 0.4; }
-        50% { opacity: 1; }
-      }
-      /* Badge ping circular */
+      @keyframes pulseBar { 0%,100% { opacity: .4; } 50% { opacity: 1; } }
       .ping-badge {
-        position: relative;
-        width: 10px;
-        height: 10px;
-        border-radius: 9999px;
-        background: #16a34a;
-        box-shadow: 0 0 0 2px #e6f9ec; /* halo sutil */
+        position: relative; width: 10px; height: 10px; border-radius: 9999px;
+        background: #16a34a; box-shadow: 0 0 0 2px #e6f9ec;
       }
       .ping-badge::after {
-        content: "";
-        position: absolute;
-        inset: 0;
-        border-radius: 9999px;
-        animation: ping 1.25s cubic-bezier(0, 0, 0.2, 1) infinite;
-        border: 2px solid rgba(22,163,74,0.5);
+        content: ""; position: absolute; inset: 0; border-radius: 9999px;
+        animation: ping 1.25s cubic-bezier(0,0,.2,1) infinite;
+        border: 2px solid rgba(22,163,74,.5);
       }
       @keyframes ping {
-        0% { transform: scale(1); opacity: 0.85; }
+        0% { transform: scale(1); opacity: .85; }
         75% { transform: scale(1.9); opacity: 0; }
         100% { transform: scale(2.1); opacity: 0; }
       }
     `}</style>
   );
 
-  // Estado base (feed paginado)
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
+  // ======================
+  // Estado base (feed)
+  // ======================
+  const [items, setItems] = useState([]);           // lista ACUMULADA (primer lote + paginados)
+  const [loading, setLoading] = useState(true);     // loading inicial (primer lote)
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);     // si hay más por paginar
+  const lastDocRef = useRef(null);                  // cursor del ÚLTIMO doc traído (para paginar hacia abajo)
 
   // Filtros UI existentes
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("todos"); // todos | mios | fav | etiquetas
   const [selectedLabel, setSelectedLabel] = useState("__all__");
 
-  // ----------------------
-  //  P A G I N A D O  (para todos/mios/fav)
-  // ----------------------
-  const [pageSize, setPageSize] = useState(25); // 10/25/50
-  const [pageIndex, setPageIndex] = useState(0); // 0-based
-  const cursorsRef = useRef([]); // guarda docSnapshots (último de cada página)
-  const unsubRef = useRef(null); // limpiar suscripción actual
-
   // =========================
-  //  "Visto" de último entrante
-  //  (persistido en localStorage por conversación)
+  //  "Visto" de último entrante (LS + Firestore)
   // =========================
   const SEEN_KEY = "convSeenInbound_v1";
   const seenInboundRef = useRef({});
   const [seenTick, setSeenTick] = useState(0);
-  // cargar del LS 1 vez
   useEffect(() => {
     try {
       const raw = localStorage.getItem(SEEN_KEY);
@@ -144,11 +118,8 @@ export default function ConversationsList({ activeId, onSelect }) {
     }
   }, []);
   const saveSeen = () => {
-    try {
-      localStorage.setItem(SEEN_KEY, JSON.stringify(seenInboundRef.current));
-    } catch {}
+    try { localStorage.setItem(SEEN_KEY, JSON.stringify(seenInboundRef.current)); } catch {}
   };
-  // Cargar estado de "visto" desde Firestore para un lote de IDs
   const loadSeenFor = async (ids) => {
     try {
       if (!user?.uid || !Array.isArray(ids) || ids.length === 0) return;
@@ -184,7 +155,6 @@ export default function ConversationsList({ activeId, onSelect }) {
       seenInboundRef.current[id] || 0
     );
     saveSeen();
-    // Persistir en Firestore para sincronizar entre dispositivos
     try {
       if (user?.uid) {
         await setDoc(
@@ -198,21 +168,23 @@ export default function ConversationsList({ activeId, onSelect }) {
     }
   };
 
-  // Suscripción a conversaciones (paginada por actividad desc) — SOLO para tabs != 'etiquetas'
+  // =========================
+  //  Suscripción (primer lote en tiempo real)
+  // =========================
+  const unsubRef = useRef(null);
   useEffect(() => {
-    if (tab === "etiquetas") return; // no usamos el feed paginado en etiquetas
+    if (tab === "etiquetas") return; // la vista etiquetas usa su flujo propio
     setLoading(true);
+    setHasMore(true);
+    lastDocRef.current = null; // reset cursor al cambiar de tab
 
+    // Primer lote en tiempo real
+    const pageSize = 25; // tamaño del primer lote (igual que antes por defecto)
     let qRef = query(
       collection(db, "conversations"),
       orderBy("lastMessageAt", "desc"),
       limit(pageSize)
     );
-
-    const cursor = cursorsRef.current[pageIndex - 1];
-    if (pageIndex > 0 && cursor) {
-      qRef = query(qRef, startAfter(cursor));
-    }
 
     if (unsubRef.current) {
       unsubRef.current();
@@ -225,12 +197,16 @@ export default function ConversationsList({ activeId, onSelect }) {
         try {
           const docs = snap.docs;
           const lastVisible = docs[docs.length - 1] || null;
-          if (lastVisible) cursorsRef.current[pageIndex] = lastVisible;
+          if (lastVisible && !lastDocRef.current) {
+            // setear cursor con el último del primer lote (de inicio)
+            lastDocRef.current = lastVisible;
+          }
 
           const rows = docs.map((d) => ({ id: d.id, ...d.data(), contact: null }));
           const ids = rows.map((r) => r.id);
-          let contactsById = {};
 
+          // Contactos
+          let contactsById = {};
           if (ids.length > 0) {
             const chunks = chunk(ids, 10);
             const results = await Promise.all(
@@ -244,21 +220,26 @@ export default function ConversationsList({ activeId, onSelect }) {
               });
             }
           }
+          const withContacts = rows.map((r) => ({ ...r, contact: contactsById[r.id] || null }));
 
-      const withContacts = rows.map((r) => ({
-        ...r,
-        contact: contactsById[r.id] || null,
-      }));
+          // Merge: actualizo/insert los del primer lote dentro de la lista acumulada
+          setItems((prev) => {
+            const map = new Map(prev.map((x) => [String(x.id), x]));
+            for (const r of withContacts) map.set(String(r.id), { ...(map.get(String(r.id)) || {}), ...r });
+            // ordenar por lastMessageAt desc
+            const arr = Array.from(map.values());
+            arr.sort((a, b) => {
+              const ta = tsToMillis(a.lastMessageAt);
+              const tb = tsToMillis(b.lastMessageAt);
+              return tb - ta;
+            });
+            return arr;
+          });
 
-      setItems(withContacts);
-      // Cargar estado "visto" desde Firestore para estas IDs
-      try {
-        await loadSeenFor(ids);
-      } catch (e) {
-        console.error("loadSeenFor(paginated) error:", e);
-      }
+          // cargar estado "visto" para estas ids
+          try { await loadSeenFor(ids); } catch (e) { console.error("loadSeenFor(realtime) error:", e); }
         } catch (e) {
-          console.error("onSnapshot(conversations) paginated error:", e);
+          console.error("onSnapshot first-page error:", e);
         } finally {
           setLoading(false);
         }
@@ -275,7 +256,97 @@ export default function ConversationsList({ activeId, onSelect }) {
         unsubRef.current = null;
       }
     };
-  }, [tab, pageIndex, pageSize]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  // =========================
+  //  Cargar MÁS (paginado hacia abajo)
+  // =========================
+  const loadMore = async () => {
+    if (isLoadingMore || !hasMore || tab === "etiquetas") return;
+    if (search.trim()) return; // si hay búsqueda activa, evitamos traer más para no gastar de más
+
+    const pageSize = 25;
+    const cursor = lastDocRef.current;
+    if (!cursor) return;
+
+    setIsLoadingMore(true);
+    try {
+      const qBase = query(
+        collection(db, "conversations"),
+        orderBy("lastMessageAt", "desc"),
+        startAfter(cursor),
+        limit(pageSize)
+      );
+      const snap = await getDocs(qBase);
+      if (snap.empty) {
+        setHasMore(false);
+        return;
+      }
+
+      const rows = snap.docs.map((d) => ({ id: d.id, ...d.data(), contact: null }));
+      const ids = rows.map((r) => r.id);
+
+      // contactos
+      let contactsById = {};
+      for (const ids10 of chunk(ids, 10)) {
+        const res = await getDocs(
+          query(collection(db, "contacts"), where(documentId(), "in", ids10))
+        );
+        res.forEach((docSnap) => {
+          contactsById[docSnap.id] = docSnap.data();
+        });
+      }
+
+      const withContacts = rows.map((r) => ({ ...r, contact: contactsById[r.id] || null }));
+
+      // append sin duplicar
+      setItems((prev) => {
+        const existingIds = new Set(prev.map((x) => String(x.id)));
+        const appended = [...prev];
+        for (const r of withContacts) {
+          if (!existingIds.has(String(r.id))) appended.push(r);
+        }
+        // ordenar por lastMessageAt desc (por si algún item venía mezclado)
+        appended.sort((a, b) => tsToMillis(b.lastMessageAt) - tsToMillis(a.lastMessageAt));
+        return appended;
+      });
+
+      // update cursor
+      const newLast = snap.docs[snap.docs.length - 1] || null;
+      lastDocRef.current = newLast || lastDocRef.current;
+
+      // seen
+      try { await loadSeenFor(ids); } catch (e) { console.error("loadSeenFor(more) error:", e); }
+
+      // cortar si vino incompleto
+      if (snap.size < pageSize) setHasMore(false);
+    } catch (e) {
+      console.error("loadMore error:", e);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
+
+  // IntersectionObserver para disparar loadMore al llegar al final
+const sentinelRef = useRef(null);
+useEffect(() => {
+  if (tab === "etiquetas" || loading) return;      // ⟵ esperar a que termine el primer load
+  const el = sentinelRef.current;
+  if (!el) return;
+
+  const io = new IntersectionObserver(
+    (entries) => {
+      const first = entries[0];
+      if (first?.isIntersecting) loadMore();
+    },
+    { root: null, rootMargin: "1200px 0px 1200px 0px", threshold: 0.01 }
+  );
+
+  io.observe(el);
+  return () => io.disconnect();
+  // ⟵ quitamos sentinelRef.current; agregamos 'loading'
+}, [tab, hasMore, isLoadingMore, search, loading]);
 
   // Helpers
   const isStarred = (c) =>
@@ -324,8 +395,7 @@ export default function ConversationsList({ activeId, onSelect }) {
           assignedToUid: user.uid,
           assignedToName: user.displayName || user.email || "Agente",
         });
-        // 2) **Línea de base** de "visto" al momento de asignarme:
-        //    Evita que aparezca el punto por mensajes viejos.
+        // 2) baseline "visto"
         const curInbound =
           tsToMillis(cur.lastInboundAt) || tsToMillis(cur.lastMessageAt);
         if (curInbound) {
@@ -337,7 +407,7 @@ export default function ConversationsList({ activeId, onSelect }) {
           saveSeen();
         }
       });
-      // Persistir baseline "visto" en Firestore para sincronización
+      // persistir baseline "visto"
       try {
         const id = String(c.id);
         const inboundMillis = seenInboundRef.current[id] || 0;
@@ -395,10 +465,10 @@ export default function ConversationsList({ activeId, onSelect }) {
     }
   };
 
-  // Buscar por texto (nombre o número) + excluir eliminados (para feed paginado)
+  // Buscar por texto (nombre o número) + excluir eliminados
   const filteredByText = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const base = items.filter((c) => !c.deletedAt); // ocultar eliminados
+    const base = items.filter((c) => !c.deletedAt);
     if (!q) return base;
     return base.filter((c) => {
       const name = String(c.contact?.name || "").toLowerCase();
@@ -407,16 +477,14 @@ export default function ConversationsList({ activeId, onSelect }) {
     });
   }, [items, search]);
 
-  // Filtros por pestaña (lista normal, paginada)
+  // Filtros por pestaña (lista normal)
   const filtered = useMemo(() => {
     const base = filteredByText;
     if (tab === "mios" && user?.uid) {
       return base.filter((c) => c.assignedToUid === user.uid);
     }
     if (tab === "fav" && user?.uid) {
-      return base.filter(
-        (c) => Array.isArray(c.stars) && c.stars.includes(user.uid)
-      );
+      return base.filter((c) => Array.isArray(c.stars) && c.stars.includes(user.uid));
     }
     return base;
   }, [filteredByText, tab, user?.uid]);
@@ -424,11 +492,10 @@ export default function ConversationsList({ activeId, onSelect }) {
   // ==========================================
   //   ETIQUETAS (TODAS, SIN PAGINACIÓN)
   // ==========================================
-  const [labelsAll, setLabelsAll] = useState([]); // todas las convos asignadas a mí (sin paginar)
+  const [labelsAll, setLabelsAll] = useState([]);
   const [labelsLoading, setLabelsLoading] = useState(false);
   const [labelsError, setLabelsError] = useState("");
 
-  // Cargar TODO para la vista "Por etiqueta"
   useEffect(() => {
     let cancelled = false;
     async function loadAllForLabels() {
@@ -451,9 +518,7 @@ export default function ConversationsList({ activeId, onSelect }) {
           if (snap.empty) break;
 
           const rows = snap.docs.map((d) => ({ id: d.id, ...d.data(), contact: null }));
-          const mine = rows.filter(
-            (c) => !c.deletedAt && c.assignedToUid === user.uid
-          );
+          const mine = rows.filter((c) => !c.deletedAt && c.assignedToUid === user.uid);
           out.push(...mine);
 
           last = snap.docs[snap.docs.length - 1];
@@ -462,7 +527,7 @@ export default function ConversationsList({ activeId, onSelect }) {
           if (cancelled) return;
         }
 
-        // Cargar contactos en batches
+        // contactos
         const ids = out.map((r) => r.id);
         let contactsById = {};
         for (const ids10 of chunk(ids, 10)) {
@@ -475,28 +540,13 @@ export default function ConversationsList({ activeId, onSelect }) {
           if (cancelled) return;
         }
 
-        const withContacts = out.map((r) => ({
-          ...r,
-          contact: contactsById[r.id] || null,
-        }));
+        const withContacts = out.map((r) => ({ ...r, contact: contactsById[r.id] || null }));
 
-        // Cargar estado "visto" desde Firestore para estas IDs (vista etiquetas)
-        try {
-          await loadSeenFor(ids);
-        } catch (e) {
-          console.error("loadSeenFor(labels) error:", e);
-        }
+        // seen
+        try { await loadSeenFor(ids); } catch (e) { console.error("loadSeenFor(labels) error:", e); }
 
-        // Orden final por actividad (defensivo)
-        withContacts.sort((a, b) => {
-          const ta =
-            a.lastMessageAt?.toMillis?.() ??
-            (a.lastMessageAt ? +new Date(a.lastMessageAt) : 0);
-          const tb =
-            b.lastMessageAt?.toMillis?.() ??
-            (b.lastMessageAt ? +new Date(b.lastMessageAt) : 0);
-          return tb - ta;
-        });
+        // ordenar final
+        withContacts.sort((a, b) => tsToMillis(b.lastMessageAt) - tsToMillis(a.lastMessageAt));
 
         if (!cancelled) setLabelsAll(withContacts);
       } catch (err) {
@@ -507,19 +557,16 @@ export default function ConversationsList({ activeId, onSelect }) {
       }
     }
     loadAllForLabels();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [tab, user?.uid]);
 
-  // Array base para agrupar etiquetas (cuando estamos en etiquetas, usamos labelsAll sin paginar)
+  // índice por etiqueta
   const baseForLabels = tab === "etiquetas"
     ? labelsAll
     : (user?.uid ? filtered.filter((c) => c.assignedToUid === user?.uid) : []);
 
-  // Índice por etiqueta (clave normalizada), manteniendo nombre original
   const labelsIndex = useMemo(() => {
-    const map = new Map(); // key: normSlug -> { display, items: [] }
+    const map = new Map();
     for (const c of baseForLabels) {
       const slugs =
         Array.isArray(c.labels) && c.labels.length ? c.labels : ["__none__"];
@@ -530,17 +577,8 @@ export default function ConversationsList({ activeId, onSelect }) {
         map.get(key).items.push(c);
       }
     }
-    // ordenar cada grupo por actividad
     for (const entry of map.values()) {
-      entry.items.sort((a, b) => {
-        const ta =
-          a.lastMessageAt?.toMillis?.() ??
-          (a.lastMessageAt ? +new Date(a.lastMessageAt) : 0);
-        const tb =
-          b.lastMessageAt?.toMillis?.() ??
-          (b.lastMessageAt ? +new Date(b.lastMessageAt) : 0);
-        return tb - ta;
-      });
+      entry.items.sort((a, b) => tsToMillis(b.lastMessageAt) - tsToMillis(a.lastMessageAt));
     }
     return map;
   }, [baseForLabels]);
@@ -563,7 +601,6 @@ export default function ConversationsList({ activeId, onSelect }) {
 
   const canOpen = (c) => !c.assignedToUid || c.assignedToUid === user?.uid;
 
-  // Marca "visto" al abrir si corresponde y luego abre
   const tryOpen = (c) => {
     if (canOpen(c)) {
       markSeen(c);
@@ -571,32 +608,10 @@ export default function ConversationsList({ activeId, onSelect }) {
     }
   };
 
-  // clave seleccionada normalizada
-  const selectedKey =
-    selectedLabel === "__all__" ? "__all__" : normSlug(selectedLabel);
-  const selectedGroup =
-    selectedKey === "__all__" ? null : labelsIndex.get(selectedKey);
-
-  // Handlers de paginado (solo afectan tabs != 'etiquetas')
-  const canPrev = pageIndex > 0;
-  const canNext = !!cursorsRef.current[pageIndex];
-
-  const goPrev = () => {
-    if (!canPrev) return;
-    setPageIndex((p) => Math.max(0, p - 1));
-  };
-  const goNext = () => {
-    if (!canNext) return;
-    setPageIndex((p) => p + 1);
-  };
-  useEffect(() => {
-    if (tab !== "etiquetas") setPageIndex(0);
-  }, [pageSize, tab]);
-
   // ========= Cálculo de "nuevo para mí" =========
   const isNewForMe = (c, isActive, assignedToMe) => {
     if (!assignedToMe) return false;
-    if (isActive) return false; // si ya estoy dentro, no hace falta llamar la atención
+    if (isActive) return false;
     const inboundMillis =
       tsToMillis(c.lastInboundAt) || tsToMillis(c.lastMessageAt);
     if (!inboundMillis) return false;
@@ -608,7 +623,7 @@ export default function ConversationsList({ activeId, onSelect }) {
     <div className="flex flex-col min-h-0 h-full border-r bg-[#F6FBF7] border-[#CDEBD6]">
       {AttentionStyles}
 
-      {/* Header superior: tabs + búsqueda + paginado (paginado oculto en 'etiquetas') */}
+      {/* Header superior: tabs + búsqueda (sin botones de paginado) */}
       <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 p-2 border-b bg-[#E8F5E9] border-[#CDEBD6]">
         {/* Tabs */}
         <div className="flex overflow-x-auto max-w-full border rounded bg-white/70 border-[#CDEBD6]">
@@ -642,44 +657,6 @@ export default function ConversationsList({ activeId, onSelect }) {
           onChange={(e) => setSearch(e.target.value)}
         />
 
-        {/* Controles de paginado: se ocultan en 'etiquetas' */}
-        {tab !== "etiquetas" && (
-          <div className="flex gap-2 items-center ml-auto">
-            <label className="text-xs opacity-70">Por página</label>
-            <select
-              className="select select-bordered select-xs bg-white border-[#CDEBD6] focus:border-[#2E7D32]"
-              value={pageSize}
-              onChange={(e) => setPageSize(Number(e.target.value))}
-            >
-              <option value={10}>10</option>
-              <option value={25}>25</option>
-              <option value={50}>50</option>
-            </select>
-
-            <div className="join">
-              <button
-                className={"btn btn-xs join-item " + (!canPrev ? "btn-disabled" : "")}
-                onClick={goPrev}
-                disabled={!canPrev}
-                title="Anterior"
-              >
-                ◀
-              </button>
-              <button
-                className={"btn btn-xs join-item " + (!canNext ? "btn-disabled" : "")}
-                onClick={goNext}
-                disabled={!canNext}
-                title="Siguiente"
-              >
-                ▶
-              </button>
-            </div>
-            <span className="text-xs px-2 py-1 rounded bg-white/70 border border-[#CDEBD6]">
-              Página <b>{pageIndex + 1}</b>
-            </span>
-          </div>
-        )}
-
         {/* Estado de carga para etiquetas */}
         {tab === "etiquetas" && (
           <div className="ml-auto text-xs">
@@ -707,6 +684,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                 <RowSkeleton />
               </>
             )}
+
             {!loading &&
               filtered.map((c) => {
                 const isActive = String(c.id) === String(activeId || "");
@@ -764,10 +742,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                               unassign(c);
                             }}
                             className="border-0 btn btn-xs md:btn-sm"
-                            style={{
-                              backgroundColor: "var(--color-error, #ef4444)",
-                              color: "#fff",
-                            }}
+                            style={{ backgroundColor: "var(--color-error, #ef4444)", color: "#fff" }}
                             title="Desasignarme"
                           >
                             Yo ✓
@@ -793,18 +768,14 @@ export default function ConversationsList({ activeId, onSelect }) {
                               assignToMe(c);
                             }}
                             className="btn btn-xs md:btn-sm"
-                            style={{
-                              backgroundColor: "#2E7D32",
-                              borderColor: "#2E7D32",
-                              color: "#fff",
-                            }}
+                            style={{ backgroundColor: "#2E7D32", borderColor: "#2E7D32", color: "#fff" }}
                             title="Asignarme esta conversación"
                           >
                             Asignarme
                           </button>
                         )}
 
-                        {/* ☆/★: deshabilitado si lockedByOther */}
+                        {/* ☆/★ */}
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -859,11 +830,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                       {c.assignedToUid ? (
                         <span>
                           Asignado a{" "}
-                          <b>
-                            {c.assignedToUid === user?.uid
-                              ? "mí"
-                              : c.assignedToName || c.assignedToUid}
-                          </b>
+                          <b>{c.assignedToUid === user?.uid ? "mí" : c.assignedToName || c.assignedToUid}</b>
                         </span>
                       ) : (
                         <span className="italic text-gray-400">
@@ -874,9 +841,25 @@ export default function ConversationsList({ activeId, onSelect }) {
                   </div>
                 );
               })}
+
+            {/* Loader infinito / fin de lista */}
+            {!loading && (
+              <div className="py-4">
+                {isLoadingMore && (
+                  <div className="px-3 text-sm text-center text-gray-500">Cargando más…</div>
+                )}
+                {!isLoadingMore && hasMore && (
+                  <div ref={sentinelRef} className="h-6" aria-hidden />
+                )}
+                {!hasMore && (
+                  <div className="px-3 text-xs text-center text-gray-400">Fin de la lista</div>
+                )}
+              </div>
+            )}
+
             {!loading && filtered.length === 0 && (
               <div className="px-4 py-8 text-sm text-center text-gray-500">
-                No hay conversaciones para esta página / filtros.
+                No hay conversaciones para estos filtros.
               </div>
             )}
           </>
@@ -917,9 +900,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                       >
                         <span className="flex gap-2 items-center truncate">
                           {isNone ? (
-                            <span className="text-xs badge badge-neutral">
-                              Sin etiqueta
-                            </span>
+                            <span className="text-xs badge badge-neutral">Sin etiqueta</span>
                           ) : (
                             <LabelChips slugs={[display]} />
                           )}
@@ -937,7 +918,7 @@ export default function ConversationsList({ activeId, onSelect }) {
               </ul>
             </aside>
 
-            {/* Selector mobile (arriba y sticky) */}
+            {/* Selector mobile */}
             <div className="w-full md:hidden sticky top-0 z-10 border-b border-[#CDEBD6] bg-[#EAF7EE] p-2">
               <label className="block mb-1 text-xs text-gray-600">Etiqueta</label>
               <select
@@ -962,7 +943,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                   <RowSkeleton />
                   <RowSkeleton />
                 </div>
-              ) : selectedKey === "__all__" ? (
+              ) : selectedLabel === "__all__" ? (
                 <div className="divide-y">
                   {sortedGroups.map(({ key, display, items }) => {
                     const isNone = display === "__none__";
@@ -971,25 +952,19 @@ export default function ConversationsList({ activeId, onSelect }) {
                         <summary className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-[#EAF7EE]">
                           <div className="flex gap-2 items-center">
                             {isNone ? (
-                              <span className="text-xs badge badge-neutral">
-                                Sin etiqueta
-                              </span>
+                              <span className="text-xs badge badge-neutral">Sin etiqueta</span>
                             ) : (
                               <LabelChips slugs={[display]} />
                             )}
                           </div>
-                          <span className="text-xs text-gray-500">
-                            {items.length}
-                          </span>
+                          <span className="text-xs text-gray-500">{items.length}</span>
                         </summary>
                         <div className="p-2 space-y-1">
                           {items.map((c) => {
                             const isActive = String(c.id) === String(activeId || "");
                             const slugs = Array.isArray(c.labels) ? c.labels : [];
-                            const assignedToMe =
-                              user?.uid && c.assignedToUid === user?.uid;
-                            const lockedByOther =
-                              !!c.assignedToUid && !assignedToMe;
+                            const assignedToMe = user?.uid && c.assignedToUid === user?.uid;
+                            const lockedByOther = !!c.assignedToUid && !assignedToMe;
                             const showNew = isNewForMe(c, isActive, !!assignedToMe);
 
                             return (
@@ -1018,9 +993,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                                   <div className="min-w-0">
                                     <div className="flex gap-2 items-center font-mono text-sm truncate">
                                       {c.contact?.name || c.id}
-                                      {showNew && (
-                                        <span className="ping-badge" title="Nuevo mensaje entrante" />
-                                      )}
+                                      {showNew && <span className="ping-badge" title="Nuevo mensaje entrante" />}
                                     </div>
                                     <div className="text-[11px] text-gray-500">
                                       {formatShort(c.lastMessageAt)}
@@ -1032,15 +1005,9 @@ export default function ConversationsList({ activeId, onSelect }) {
                                   <div className="flex gap-2 items-center shrink-0">
                                     {assignedToMe ? (
                                       <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          unassign(c);
-                                        }}
+                                        onClick={(e) => { e.stopPropagation(); unassign(c); }}
                                         className="border-0 btn btn-xs md:btn-sm"
-                                        style={{
-                                          backgroundColor: "var(--color-error, #ef4444)",
-                                          color: "#fff",
-                                        }}
+                                        style={{ backgroundColor: "var(--color-error, #ef4444)", color: "#fff" }}
                                         title="Desasignarme"
                                       >
                                         Yo ✓
@@ -1050,24 +1017,15 @@ export default function ConversationsList({ activeId, onSelect }) {
                                         className="btn btn-xs md:btn-sm btn-disabled"
                                         disabled
                                         onClick={(e) => e.stopPropagation()}
-                                        title={`Asignada a ${
-                                          c.assignedToName || "otro agente"
-                                        }`}
+                                        title={`Asignada a ${c.assignedToName || "otro agente"}`}
                                       >
                                         Ocupada
                                       </button>
                                     ) : (
                                       <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          assignToMe(c);
-                                        }}
+                                        onClick={(e) => { e.stopPropagation(); assignToMe(c); }}
                                         className="btn btn-xs md:btn-sm"
-                                        style={{
-                                          backgroundColor: "#2E7D32",
-                                          borderColor: "#2E7D32",
-                                          color: "#fff",
-                                        }}
+                                        style={{ backgroundColor: "#2E7D32", borderColor: "#2E7D32", color: "#fff" }}
                                         title="Asignarme esta conversación"
                                       >
                                         Asignarme
@@ -1102,10 +1060,7 @@ export default function ConversationsList({ activeId, onSelect }) {
 
                                     {/* 🗑️ Eliminar */}
                                     <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        softDelete(c);
-                                      }}
+                                      onClick={(e) => { e.stopPropagation(); softDelete(c); }}
                                       disabled={!canDelete(c)}
                                       className={
                                         "btn btn-xs md:btn-sm " +
@@ -1127,16 +1082,11 @@ export default function ConversationsList({ activeId, onSelect }) {
                                   {c.assignedToUid ? (
                                     <span>
                                       Asignado a{" "}
-                                      <b>
-                                        {c.assignedToUid === user?.uid
-                                          ? "mí"
-                                          : c.assignedToName || c.assignedToUid}
-                                      </b>
+                                      <b>{c.assignedToUid === user?.uid ? "mí" : c.assignedToName || c.assignedToUid}</b>
                                     </span>
                                   ) : (
                                     <span className="italic text-gray-400">
-                                      {c.assignedToName ||
-                                        (c.assignedToUid ? "Asignado" : "No asignado")}
+                                      {c.assignedToName || (c.assignedToUid ? "Asignado" : "No asignado")}
                                     </span>
                                   )}
                                 </div>
@@ -1150,11 +1100,10 @@ export default function ConversationsList({ activeId, onSelect }) {
                 </div>
               ) : (
                 <div className="p-2 space-y-2">
-                  {(selectedGroup?.items || []).map((c) => {
+                  {(labelsIndex.get(normSlug(selectedLabel))?.items || []).map((c) => {
                     const isActive = String(c.id) === String(activeId || "");
                     const slugs = Array.isArray(c.labels) ? c.labels : [];
-                    const assignedToMe =
-                      user?.uid && c.assignedToUid === user?.uid;
+                    const assignedToMe = user?.uid && c.assignedToUid === user?.uid;
                     const lockedByOther = !!c.assignedToUid && !assignedToMe;
                     const showNew = isNewForMe(c, isActive, !!assignedToMe);
 
@@ -1171,8 +1120,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                         tabIndex={0}
                         onClick={() => tryOpen(c)}
                         onKeyDown={(e) => {
-                          if ((e.key === "Enter" || e.key === " ") && canOpen(c))
-                            tryOpen(c);
+                          if ((e.key === "Enter" || e.key === " ") && canOpen(c)) tryOpen(c);
                         }}
                         title={
                           lockedByOther
@@ -1196,15 +1144,9 @@ export default function ConversationsList({ activeId, onSelect }) {
                           <div className="flex gap-2 items-center shrink-0">
                             {assignedToMe ? (
                               <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  unassign(c);
-                                }}
+                                onClick={(e) => { e.stopPropagation(); unassign(c); }}
                                 className="border-0 btn btn-xs md:btn-sm"
-                                style={{
-                                  backgroundColor: "var(--color-error, #ef4444)",
-                                  color: "#fff",
-                                }}
+                                style={{ backgroundColor: "var(--color-error, #ef4444)", color: "#fff" }}
                                 title="Desasignarme"
                               >
                                 Yo ✓
@@ -1220,16 +1162,9 @@ export default function ConversationsList({ activeId, onSelect }) {
                               </button>
                             ) : (
                               <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  assignToMe(c);
-                                }}
+                                onClick={(e) => { e.stopPropagation(); assignToMe(c); }}
                                 className="btn btn-xs md:btn-sm"
-                                style={{
-                                  backgroundColor: "#2E7D32",
-                                  borderColor: "#2E7D32",
-                                  color: "#fff",
-                                }}
+                                style={{ backgroundColor: "#2E7D32", borderColor: "#2E7D32", color: "#fff" }}
                                 title="Asignarme esta conversación"
                               >
                                 Asignarme
@@ -1264,10 +1199,7 @@ export default function ConversationsList({ activeId, onSelect }) {
 
                             {/* 🗑️ Eliminar */}
                             <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                softDelete(c);
-                              }}
+                              onClick={(e) => { e.stopPropagation(); softDelete(c); }}
                               disabled={!canDelete(c)}
                               className={
                                 "btn btn-xs md:btn-sm " +
@@ -1289,16 +1221,11 @@ export default function ConversationsList({ activeId, onSelect }) {
                           {c.assignedToUid ? (
                             <span>
                               Asignado a{" "}
-                              <b>
-                                {c.assignedToUid === user?.uid
-                                  ? "mí"
-                                  : c.assignedToName || c.assignedToUid}
-                              </b>
+                              <b>{c.assignedToUid === user?.uid ? "mí" : c.assignedToName || c.assignedToUid}</b>
                             </span>
                           ) : (
                             <span className="italic text-gray-400">
-                              {c.assignedToName ||
-                                (c.assignedToUid ? "Asignado" : "No asignado")}
+                              {c.assignedToName || (c.assignedToUid ? "Asignado" : "No asignado")}
                             </span>
                           )}
                         </div>
