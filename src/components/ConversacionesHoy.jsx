@@ -15,12 +15,11 @@ import {
 import { db } from "../firebase.js"; // 👈 ajustá la ruta a tu proyecto
 import { format } from "date-fns";
 
-function startEndOfTodayInLocalTZ() {
-  // AR (-03:00) usando hora local del navegador
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = now.getMonth();
-  const d = now.getDate();
+function startEndOfDayInLocalTZ(date) {
+  // Usa la TZ local del navegador (AR -03:00 en tu caso)
+  const y = date.getFullYear();
+  const m = date.getMonth();
+  const d = date.getDate();
   const start = new Date(y, m, d, 0, 0, 0, 0);
   const end = new Date(y, m, d, 23, 59, 59, 999);
   return { start, end };
@@ -54,13 +53,24 @@ export default function ConversacionesHoy({
   collectionName = "conversations",
   pageLimit = 200, // subí si hace falta
 }) {
-  const [{ start, end }] = useState(() => startEndOfTodayInLocalTZ());
+  // Fecha seleccionada (por defecto hoy)
+  const [selectedDate, setSelectedDate] = useState(() => new Date());
+  const [{ start, end }, setRange] = useState(() =>
+    startEndOfDayInLocalTZ(new Date()),
+  );
+
   const [loading, setLoading] = useState(true);
-  const [nuevasHoy, setNuevasHoy] = useState([]);  // firstInboundAt/createdAt hoy
-  const [activasHoy, setActivasHoy] = useState([]); // lastInboundAt hoy
+  const [nuevasHoy, setNuevasHoy] = useState([]); // firstInboundAt/createdAt en el día elegido
+  const [activasHoy, setActivasHoy] = useState([]); // lastInboundAt en el día elegido
   const [modo, setModo] = useState("nuevas"); // "nuevas" | "activas"
   const [search, setSearch] = useState("");
 
+  // Cada vez que cambia selectedDate, recalculamos el rango
+  useEffect(() => {
+    setRange(startEndOfDayInLocalTZ(selectedDate));
+  }, [selectedDate]);
+
+  // Cargar datos cuando cambian: colección o fecha (rango start/end)
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -68,7 +78,7 @@ export default function ConversacionesHoy({
       try {
         const colRef = collection(db, collectionName);
 
-        // 1) NUEVAS de hoy = firstInboundAt en [start, end]
+        // 1) NUEVAS del día = firstInboundAt en [start, end]
         //    Fallback: createdAt en [start, end] (históricos que aún no tienen firstInboundAt)
         const qNuevasPrimeraVez = query(
           colRef,
@@ -95,7 +105,7 @@ export default function ConversacionesHoy({
           // dedupe por id si vino en ambas consultas
           .reduce((acc, x) => (acc.some((y) => y.id === x.id) ? acc : [...acc, x]), []);
 
-        // 2) ACTIVAS de hoy = lastInboundAt en [start, end]
+        // 2) ACTIVAS del día = lastInboundAt en [start, end]
         const qActivas = query(
           colRef,
           where("lastInboundAt", ">=", ts(start)),
@@ -118,8 +128,7 @@ export default function ConversacionesHoy({
     return () => {
       mounted = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [collectionName]);
+  }, [collectionName, start, end, pageLimit]);
 
   const rows = useMemo(() => {
     const base = modo === "nuevas" ? nuevasHoy : activasHoy;
@@ -185,8 +194,8 @@ export default function ConversacionesHoy({
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     const fname =
-      (modo === "nuevas" ? "nuevas_hoy_" : "activas_hoy_") +
-      format(new Date(), "yyyy-MM-dd") +
+      (modo === "nuevas" ? "nuevas_" : "activas_") +
+      format(selectedDate, "yyyy-MM-dd") +
       ".csv";
     a.href = url;
     a.download = fname;
@@ -194,12 +203,30 @@ export default function ConversacionesHoy({
     URL.revokeObjectURL(url);
   }
 
+  const dateStr = format(selectedDate, "yyyy-MM-dd");
+
   return (
     <div className="space-y-4 w-full">
       <div className="flex flex-wrap gap-2 items-center">
         <div className="text-lg font-semibold">
-          Conversaciones de hoy ({format(new Date(), "yyyy-MM-dd")})
+          Conversaciones del día ({dateStr})
         </div>
+
+        {/* Selector de fecha (calendario nativo) */}
+        <label className="ml-2 text-sm opacity-80">Fecha:</label>
+        <input
+          type="date"
+          className="input input-bordered input-sm"
+          value={dateStr}
+          onChange={(e) => {
+            const v = e.target.value; // yyyy-MM-dd
+            if (!v) return;
+            const [yy, mm, dd] = v.split("-").map((x) => parseInt(x, 10));
+            // new Date(año, mes-1, día) en TZ local
+            setSelectedDate(new Date(yy, mm - 1, dd));
+          }}
+        />
+
         <div className="flex gap-2 items-center ml-auto">
           <select
             className="select select-bordered select-sm"
@@ -207,8 +234,8 @@ export default function ConversacionesHoy({
             onChange={(e) => setModo(e.target.value)}
             title="Modo de vista"
           >
-            <option value="nuevas">Nuevas hoy (firstInboundAt)</option>
-            <option value="activas">Activas hoy (lastInboundAt)</option>
+            <option value="nuevas">Nuevas (firstInboundAt/createdAt)</option>
+            <option value="activas">Activas (lastInboundAt)</option>
           </select>
 
           <input
@@ -259,7 +286,7 @@ export default function ConversacionesHoy({
             {!loading && rows.length === 0 && (
               <tr>
                 <td colSpan={7} className="opacity-70">
-                  Sin resultados para hoy.
+                  Sin resultados para el día seleccionado.
                 </td>
               </tr>
             )}
@@ -293,9 +320,8 @@ export default function ConversacionesHoy({
       </div>
 
       <p className="text-xs opacity-70">
-        Nota: “Nuevas hoy” usa <code>firstInboundAt</code> (y cae a{" "}
-        <code>createdAt</code> si el histórico no lo tiene). “Activas hoy” usa{" "}
-        <code>lastInboundAt</code>.
+        “Nuevas” usa <code>firstInboundAt</code> (y cae a <code>createdAt</code> si el
+        histórico no lo tiene). “Activas” usa <code>lastInboundAt</code>.
       </p>
     </div>
   );

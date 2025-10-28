@@ -867,56 +867,60 @@ useEffect(() => {
           // ===== Vista por etiqueta (TODAS, SIN paginar) =====
           <div className="overflow-x-hidden w-full md:flex md:min-h-0">
             {/* Sidebar desktop */}
-            <aside className="hidden md:block w-56 overflow-y-auto border-r shrink-0 border-[#CDEBD6]">
-              <div className="p-2 border-b border-[#CDEBD6] bg-[#EAF7EE]">
-                <button
-                  onClick={() => setSelectedLabel("__all__")}
-                  className={
-                    "w-full rounded px-2 py-1 text-left transition-colors " +
-                    (selectedLabel === "__all__"
-                      ? "bg-[#2E7D32] text-white"
-                      : "hover:bg-[#E8F5E9]")
-                  }
-                  title="Mis etiquetas (todas agrupadas)"
-                >
-                  Mis etiquetas
-                </button>
-              </div>
+            <aside className="hidden md:block w-64 overflow-y-auto border-r shrink-0 border-[#CDEBD6]">
+  <div className="p-2 border-b border-[#CDEBD6] bg-[#EAF7EE]">
+    <button
+      onClick={() => setSelectedLabel("__all__")}
+      className={
+        "w-full rounded px-3 py-2 text-left transition-colors " +
+        (selectedLabel === "__all__"
+          ? "bg-[#2E7D32] text-white"
+          : "hover:bg-[#E8F5E9]")
+      }
+      title="Mis etiquetas (todas agrupadas)"
+    >
+      Mis etiquetas
+    </button>
+  </div>
 
-              <ul className="p-2 space-y-1">
-                {sortedGroups.map(({ key, display, items }) => {
-                  const isNone = display === "__none__";
-                  return (
-                    <li key={key}>
-                      <button
-                        onClick={() => setSelectedLabel(display)}
-                        className={
-                          "flex w-full items-center justify-between gap-2 rounded px-2 py-1 transition-colors " +
-                          (normSlug(selectedLabel) === key
-                            ? "bg-[#2E7D32] text-white"
-                            : "hover:bg-[#E8F5E9]")
-                        }
-                        title={isNone ? "Sin etiqueta" : display}
-                      >
-                        <span className="flex gap-2 items-center truncate">
-                          {isNone ? (
-                            <span className="text-xs badge badge-neutral">Sin etiqueta</span>
-                          ) : (
-                            <LabelChips slugs={[display]} />
-                          )}
-                        </span>
-                        <span className="text-xs opacity-70">{items.length}</span>
-                      </button>
-                    </li>
-                  );
-                })}
-                {sortedGroups.length === 0 && !labelsLoading && (
-                  <li className="px-2 text-sm text-gray-500">
-                    (No tenés conversaciones asignadas)
-                  </li>
-                )}
-              </ul>
-            </aside>
+  {/* GRID de etiquetas */}
+  <div className="grid grid-cols-1 gap-2 p-3">
+    {sortedGroups.map(({ key, display, items }) => {
+      const isActive = normSlug(selectedLabel) === key;
+      const isNone = display === "__none__";
+      return (
+        <button
+          key={key}
+          onClick={() => setSelectedLabel(display)}
+          className={[
+            "w-full card shadow-sm border transition-colors px-3 py-2 text-left",
+            isActive
+              ? "bg-[#2E7D32] text-white border-[#2E7D32]"
+              : "bg-base-200 hover:bg-base-300 border-base-300",
+          ].join(" ")}
+          title={isNone ? "Sin etiqueta" : display}
+        >
+          <div className="flex gap-2 justify-between items-center">
+            <div className="truncate">
+              {isNone ? (
+                <span className="badge badge-neutral">Sin etiqueta</span>
+              ) : (
+                <span className="font-medium">{display}</span>
+              )}
+            </div>
+            <span className={isActive ? "badge badge-outline" : "badge badge-ghost"}>
+              {items.length}
+            </span>
+          </div>
+        </button>
+      );
+    })}
+    {sortedGroups.length === 0 && !labelsLoading && (
+      <div className="text-sm text-gray-500">(No tenés conversaciones asignadas)</div>
+    )}
+  </div>
+</aside>
+
 
             {/* Selector mobile */}
             <div className="w-full md:hidden sticky top-0 z-10 border-b border-[#CDEBD6] bg-[#EAF7EE] p-2">
@@ -950,13 +954,14 @@ useEffect(() => {
                     return (
                       <details key={key} className="group">
                         <summary className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-[#EAF7EE]">
-                          <div className="flex gap-2 items-center">
-                            {isNone ? (
-                              <span className="text-xs badge badge-neutral">Sin etiqueta</span>
-                            ) : (
-                              <LabelChips slugs={[display]} />
-                            )}
-                          </div>
+                          <div className="truncate">
+  {isNone ? (
+    <span className="badge badge-neutral">Sin etiqueta</span>
+  ) : (
+    <LabelChips slugs={[display]} />
+  )}
+</div>
+
                           <span className="text-xs text-gray-500">{items.length}</span>
                         </summary>
                         <div className="p-2 space-y-1">

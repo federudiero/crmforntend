@@ -27,7 +27,7 @@ import TagsMenu from "./TagsMenu.jsx";
 import AudioRecorderButton from "./AudioRecorderButton.jsx";
 import StarButton from "./StarButton.jsx";
 import ChatDestacadosPanel from "./ChatDestacadosPanel.jsx";
-import { listLabels } from "../lib/labels";
+import { listLabels, PRESET_LABELS } from "../lib/labels.js";
 
 // Íconos
 import {
@@ -215,6 +215,7 @@ function isOutgoingMessage(m, user) {
 }
 
 // Texto visible robusto (WhatsApp a veces lo guarda en text.body / message.text.body / raw.* / caption)
+// Texto visible robusto (WhatsApp a veces lo guarda en text.body / message.text.body / raw.* / caption)
 function getVisibleText(m) {
   if (!m) return "";
 
@@ -262,14 +263,17 @@ function getVisibleText(m) {
       return s;
     };
 
-    // 1.c) Reconstrucción especial para HSM reengage (2–3 vars)
-    const looksLikeReengage =
-      name === "reengage_free_text" || (params?.length >= 2 && params?.length <= 3);
+    // 1.c) Reconstrucción especial SOLO si es la plantilla de reengage (por nombre)
+    const tpl = String(name || "").toLowerCase();
+    const envReengage = String(
+      (import.meta.env.VITE_WA_REENGAGE_TEMPLATE || "reengage_free_text")
+    ).toLowerCase();
+    const looksLikeReengage = tpl === envReengage || tpl === "reengage_free_text";
 
     if (looksLikeReengage) {
       const cliente  = pText(0) || "";
-      const vendedor = normalizeSeller(pText(1)); // ← aplica mapa aquí
-      const marca    = "HogarCril";               // fijo
+      const vendedor = normalizeSeller(pText(1));
+      const marca    = "HogarCril";
 
       const saludo = cliente ? `¡Hola ${cliente}!` : `¡Hola!`;
       return (
@@ -277,6 +281,20 @@ function getVisibleText(m) {
         `Te escribo para retomar tu consulta ya que pasaron más de 24 horas desde el último mensaje.\n` +
         `Respondé a este mensaje para continuar la conversación.`
       );
+    }
+
+    // 1.c.2) Preview especial para 'promo_hogarcril_combos': respetar saltos en {3}
+    if (tpl === "promo_hogarcril_combos") {
+      const saludo   = pText(0) || "";          // {1} ej. "buen dia" / "Cliente"
+      const vendedor = (pText(1) || "").trim(); // {2}
+      // {3} puede venir con '\n' o con " • " por históricos → normalizamos a '\n'
+      let combos = (pText(2) || "").replace(/ ?• ?/g, "\n").trim();
+
+      const head = saludo
+        ? `Hola ${saludo}, soy ${vendedor} de HogarCril.`
+        : `Soy ${vendedor} de HogarCril.`;
+
+      return `${head}\nHoy tenemos estas promos:\n${combos}\n¿Querés que te reserve alguno?`;
     }
 
     // 1.d) Preview genérico para el resto de plantillas
@@ -537,6 +555,24 @@ export default function ChatWindow({ conversationId, onBack }) {
 
   const getLabel = (slug) =>
     labelBySlug.get(slug) || { name: slug, slug, color: "neutral" };
+
+
+  // debajo de labelBySlug / getLabel…
+const tagsData = useMemo(() => {
+  // unir presets con las que trae listLabels(), evitando duplicados por slug
+  const merged = new Map();
+  for (const p of PRESET_LABELS) merged.set(p.slug, { slug: p.slug, name: p.name, count: 0 });
+  for (const l of allLabels) merged.set(l.slug, { slug: l.slug, name: l.name || l.slug, count: 0 });
+  return Array.from(merged.values());
+}, [allLabels]);
+
+const toggleLabel = async (slug) => {
+  if (!conversationId) return;
+  const ref = doc(db, "conversations", String(conversationId));
+  const has = convSlugs.includes(slug);
+  await updateDoc(ref, { labels: has ? arrayRemove(slug) : arrayUnion(slug) });
+};
+
 
   // meta conversación
   useEffect(() => {
@@ -2053,7 +2089,7 @@ fixed inset-0 z-[95] bg-black/70 grid place-items-center p-4"
           onClick={() => setShowTags(false)}
         >
           <div
-            className="w-full max-w-md rounded-xl shadow-xl bg-base-100"
+            className="w-full max-w-lg md:max-w-2xl lg:max-w-4xl max-h-[90vh] overflow-hidden rounded-xl shadow-xl bg-base-100"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex justify-between items-center p-3 border-b">
@@ -2065,13 +2101,11 @@ fixed inset-0 z-[95] bg-black/70 grid place-items-center p-4"
                 Cerrar
               </button>
             </div>
-            <div className="p-3">
+            <div className="p-3 overflow-y-auto max-h-[calc(90vh-56px)]">
               <TagsMenu
-                conversationId={conversationId}
-                phone={phone}
-                onClose={() => setShowTags(false)}
-                onChanged={() => setShowTags(false)}
-              />
+   tags={tagsData}
+   onPick={(slug) => toggleLabel(slug)}
+ />
             </div>
           </div>
         </div>

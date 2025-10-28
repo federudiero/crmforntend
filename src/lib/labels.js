@@ -7,14 +7,23 @@ import {
 
 // Presets por si no hay colección /labels o fallan permisos
 export const PRESET_LABELS = [
-  { slug: "cliente-potencial", name: "Cliente potencial", color: "neutral" },
-  { slug: "cliente-vip",      name: "Cliente VIP",        color: "warning" },
-  { slug: "en-seguimiento",   name: "En seguimiento",     color: "info" },
-  { slug: "no-vender",        name: "No vender",          color: "error" },
-  { slug: "posible-venta",    name: "Posible venta",      color: "accent" },
-  { slug: "vendido",          name: "Vendido",            color: "success" },
+  { slug: "vendido",            name: "Vendido",            color: "success" },
+  { slug: "posible-venta",      name: "Posible venta",      color: "info" },
+  { slug: "en-seguimiento",     name: "En seguimiento",     color: "primary" },
+  { slug: "no-vender",          name: "No vender",          color: "error" },
+  { slug: "cliente-no-responde",name: "Cliente no responde",color: "warning" },
+  { slug: "sin-respuesta",      name: "Sin respuesta",      color: "secondary" },
+  { slug: "zonas",              name: "Zonas",              color: "accent" },
+  { slug: "cerca",              name: "Cerca",              color: "accent" },
+  { slug: "dia-lunes",          name: "día-lunes",          color: "neutral" },
+  { slug: "dia-martes",         name: "día-martes",         color: "neutral" },
+  { slug: "dia-miercoles",      name: "día-miercoles",      color: "neutral" },
+  { slug: "dia-jueves",         name: "día-jueves",         color: "neutral" },
+  { slug: "dia-viernes",        name: "día-viernes",        color: "neutral" },
+  { slug: "dia-sabado",         name: "día-sabado",         color: "neutral" },
+  { slug: "cliente-potencial",  name: "Cliente potencial",  color: "info" },
+  { slug: "__none__",           name: "Sin etiqueta",       color: "neutral" },
 ];
-
 const coll = collection(db, "labels");
 
 export async function listLabels() {

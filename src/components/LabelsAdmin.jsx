@@ -77,9 +77,16 @@ export default function LabelsAdmin() {
             <h3 className="font-semibold">{editing ? "Editar etiqueta" : "Nueva etiqueta"}</h3>
             <input className="input input-bordered" placeholder="Nombre (visible)" value={form.name} onChange={(e)=>setForm(s=>({...s, name:e.target.value}))} required />
             <input className="input input-bordered" placeholder="Slug (único, sin espacios)" value={form.slug} onChange={(e)=>setForm(s=>({...s, slug:e.target.value.replace(/\s+/g,'-').toLowerCase()}))} required />
-            <select className="select select-bordered" value={form.color} onChange={(e)=>setForm(s=>({...s, color:e.target.value}))}>
-              {COLORS.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
+            <select
+  className="select select-bordered"
+  value={color}
+  onChange={(e) => setColor(e.target.value)}
+>
+  {["primary","secondary","accent","info","success","warning","error","neutral"]
+    .map((c) => (
+      <option key={c} value={c}>{c}</option>
+  ))}
+</select>
             <div className="flex gap-2">
               <button className="btn btn-primary" type="submit">{editing ? "Guardar" : "Crear"}</button>
               {editing && <button className="btn" type="button" onClick={()=>{ setEditing(null); setForm({ name:"", slug:"", color:"neutral" }); }}>Cancelar</button>}

@@ -31,6 +31,42 @@ function countTemplateVars(templateBody = "") {
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 function chunk(arr, size = 10) { const out = []; for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size)); return out; }
 
+// Saludo según hora local
+function getTimeGreeting(d = new Date()) {
+  const h = d.getHours();
+  if (h < 12) return "buen día";
+  if (h < 19) return "buenas tardes";
+  return "buenas noches";
+}
+
+// Si la plantilla ya dice "Hola {{1}}" (o con coma), evitamos duplicar "Hola"
+function fallbackForVar1FromTemplateBody(tplBody) {
+  const body = String(tplBody || "").toLowerCase();
+  const patterns = [
+    "hola {{1}}",
+    "hola, {{1}}",
+    "hola {{1}},",
+    "hola,{{1}}",
+    "hola,{{1}},"
+  ];
+  const hasHolaPrefix = patterns.some((p) => body.includes(p));
+  return hasHolaPrefix ? "" : getTimeGreeting();
+}
+
+// Sanea variables para cumplir reglas de Meta (sin \n/\t y sin 5+ espacios)
+function sanitizeParamText(input) {
+  if (input === "\u200B") return input; // respetar ZWSP cuando se usa
+  let x = String(input ?? "");
+  x = x.replace(/[\r\t]+/g, " ");      // preserva \n
+ x = x.replace(/\n{3,}/g, "\n\n");    // colapsa saltos excesivos
+  x = x.replace(/\s{2,}/g, " ");
+  x = x.replace(/ {5,}/g, "    ");
+  x = x.trim();
+  const MAX_PARAM_LEN = 1000;
+  if (x.length > MAX_PARAM_LEN) x = x.slice(0, MAX_PARAM_LEN - 1) + "…";
+  return x;
+}
+
 // ---------- fetch con token ----------
 async function authFetch(path, options = {}) {
   const auth = getAuth();
@@ -50,7 +86,7 @@ async function sendTemplate({ phone, components = [] }) {
   });
   const text = await resp.text();
   let data = {};
-  try { data = text ? JSON.parse(text) : {}; } catch { /* noop */ }
+  try { data = text ? JSON.parse(text) : {}; } catch {}
   if (!resp.ok) throw new Error(data?.error?.message || data?.error || text || `HTTP ${resp.status}`);
   return data;
 }
@@ -116,9 +152,44 @@ export default function RemarketingBulk() {
   const [labelsLoading, setLabelsLoading] = useState(false);
   const [labelsError, setLabelsError] = useState("");
   const [selectedLabels, setSelectedLabels] = useState([]);
-  const [tagPhones, setTagPhones] = useState([]);
-  const [tagPhonesMeta, setTagPhonesMeta] = useState([]);
+
+  // Con opt-in (para envío)
+  const [tagPhonesOpt, setTagPhonesOpt] = useState([]);
+  const [tagMetaOpt, setTagMetaOpt] = useState([]);
+
+  // Total sin filtro (solo vista previa)
+  const [tagPhonesAll, setTagPhonesAll] = useState([]);
+  const [tagMetaAll, setTagMetaAll] = useState([]);
+
   const [tagPhonesLoading, setTagPhonesLoading] = useState(false);
+  const [includeNoOptIn, setIncludeNoOptIn] = useState(false); // toggle vista previa sin opt-in
+
+  // ===== NUEVO: Mostrar/copiar números con estado =====
+  const [showNumbers, setShowNumbers] = useState(false);
+  const displayMeta = includeNoOptIn ? tagMetaAll : tagMetaOpt;
+
+  const numbersText = useMemo(
+    () =>
+      (displayMeta || [])
+        .map(r => `${r.phone}  ${r.optIn ? "✓ opt-in" : "✗ sin opt-in"}`)
+        .join("\n"),
+    [displayMeta]
+  );
+
+  async function copyNumbersAnnotated() {
+    try {
+      await navigator.clipboard.writeText(numbersText);
+      alert(`Copiado: ${displayMeta.length} filas (con estado)`);
+    } catch (e) { console.error("copy failed", e); }
+  }
+
+  async function copyOnlyOptIn() {
+    try {
+      const plain = (tagMetaOpt || []).map(r => r.phone).join("\n");
+      await navigator.clipboard.writeText(plain);
+      alert(`Copiado: ${tagMetaOpt.length} números (solo opt-in)`);
+    } catch (e) { console.error("copy failed", e); }
+  }
 
   const [rawPhones, setRawPhones] = useState("");
   const numbers = useMemo(() => {
@@ -156,7 +227,7 @@ export default function RemarketingBulk() {
   const [rowsState, setRowsState] = useState([]);
   const [delayMs, setDelayMs] = useState(800);
 
-  // ---------- Carga de etiquetas ----------
+  // ---------- Carga de etiquetas (catálogo) ----------
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -164,7 +235,6 @@ export default function RemarketingBulk() {
         setLabelsLoading(true);
         setLabelsError("");
         const base = await listLabels();
-        // Deducir de conversations
         let deduced = [];
         try {
           const q = query(collection(db, "conversations"), orderBy("lastMessageAt", "desc"), limit(500));
@@ -176,9 +246,7 @@ export default function RemarketingBulk() {
             ls.forEach((s) => setSlugs.add(String(s)));
           }
           deduced = Array.from(setSlugs).map((s) => ({ slug: s, name: s }));
-        } catch (e) {
-          console.warn("deduce labels from conversations error:", e);
-        }
+        } catch (e) { console.warn("deduce labels from conversations error:", e); }
         const union = new Map();
         for (const l of base || []) union.set(String(l.slug), l);
         for (const l of deduced) if (!union.has(String(l.slug))) union.set(String(l.slug), l);
@@ -197,18 +265,24 @@ export default function RemarketingBulk() {
     let cancelled = false;
     (async () => {
       try {
-        if (!selectedLabels.length) { setTagPhones([]); setTagPhonesMeta([]); return; }
+        if (!selectedLabels.length) {
+          setTagPhonesOpt([]); setTagMetaOpt([]);
+          setTagPhonesAll([]); setTagMetaAll([]);
+          return;
+        }
         setTagPhonesLoading(true);
-        const byPhone = new Map();
+
+        // 1) Con opt-in (para envío)
+        const byPhoneOpt = new Map();
         for (const ch of chunk(selectedLabels, 10)) {
-          const q = query(
+          const q1 = query(
             collection(db, "conversations"),
             where("optIn", "==", true),
             where("labels", "array-contains-any", ch),
             orderBy("lastMessageAt", "desc"),
             limit(1000)
           );
-          const snap = await getDocs(q);
+          const snap = await getDocs(q1);
           for (const d of snap.docs) {
             const data = d.data();
             const phone = normPhone(data.contactId || data.phone || d.id);
@@ -217,14 +291,42 @@ export default function RemarketingBulk() {
               ? data.lastMessageAt.toMillis()
               : (data.lastMessageAt ? +new Date(data.lastMessageAt) : 0);
             const labelsArr = Array.isArray(data.labels) ? data.labels : [];
-            byPhone.set(phone, { phone, lastMessageAt: t, labels: labelsArr, optIn: data.optIn === true });
+            byPhoneOpt.set(phone, { phone, lastMessageAt: t, labels: labelsArr, optIn: data.optIn === true });
           }
         }
-        const arr = Array.from(byPhone.values()).sort((a, b) => (b.lastMessageAt || 0) - (a.lastMessageAt || 0));
-        if (!cancelled) { setTagPhones(arr.map((r) => r.phone)); setTagPhonesMeta(arr); }
+        const arrOpt = Array.from(byPhoneOpt.values()).sort((a, b) => (b.lastMessageAt || 0) - (a.lastMessageAt || 0));
+        if (!cancelled) { setTagPhonesOpt(arrOpt.map(r => r.phone)); setTagMetaOpt(arrOpt); }
+
+        // 2) Total sin opt-in (solo vista previa)
+        const byPhoneAll = new Map();
+        for (const ch of chunk(selectedLabels, 10)) {
+          const q2 = query(
+            collection(db, "conversations"),
+            where("labels", "array-contains-any", ch),
+            orderBy("lastMessageAt", "desc"),
+            limit(1000)
+          );
+          const snap = await getDocs(q2);
+          for (const d of snap.docs) {
+            const data = d.data();
+            const phone = normPhone(data.contactId || data.phone || d.id);
+            if (!phone) continue;
+            const t = data.lastMessageAt?.toMillis?.()
+              ? data.lastMessageAt.toMillis()
+              : (data.lastMessageAt ? +new Date(data.lastMessageAt) : 0);
+            const labelsArr = Array.isArray(data.labels) ? data.labels : [];
+            byPhoneAll.set(phone, { phone, lastMessageAt: t, labels: labelsArr, optIn: data.optIn === true });
+          }
+        }
+        const arrAll = Array.from(byPhoneAll.values()).sort((a, b) => (b.lastMessageAt || 0) - (a.lastMessageAt || 0));
+        if (!cancelled) { setTagPhonesAll(arrAll.map(r => r.phone)); setTagMetaAll(arrAll); }
+
       } catch (e) {
         console.error("search convs by labels error:", e);
-        if (!cancelled) { setTagPhones([]); setTagPhonesMeta([]); }
+        if (!cancelled) {
+          setTagPhonesOpt([]); setTagMetaOpt([]);
+          setTagPhonesAll([]); setTagMetaAll([]);
+        }
       } finally { if (!cancelled) setTagPhonesLoading(false); }
     })();
     return () => { cancelled = true; };
@@ -232,22 +334,29 @@ export default function RemarketingBulk() {
 
   useEffect(() => { if (destMode === "tags" && mode === "csv") setMode("global"); }, [destMode, mode]);
 
-  const totalToSend = useMemo(() => destMode === "tags" ? tagPhones.length : (mode === "global" ? numbers.length : csvPreview.length), [destMode, tagPhones, mode, numbers, csvPreview]);
+  const totalToSend = useMemo(() => {
+    if (destMode === "tags") return tagPhonesOpt.length; // envío SIEMPRE opt-in
+    return (mode === "global" ? numbers.length : csvPreview.length);
+  }, [destMode, tagPhonesOpt.length, mode, numbers.length, csvPreview.length]);
 
   const hasLockedTemplate = Boolean(tpl);
 
+  // ----------- VALIDACIÓN: {{1}} opcional con fallback según hora -----------
   const canSend = useMemo(() => {
     if (!hasLockedTemplate) return false;
     if (!confirmOptIn || !confirmTemplate) return false;
     if (destMode === "tags") {
       if (varCount <= 0) return false;
-      return totalToSend > 0 && vars.slice(0, varCount).every((v) => String(v || "").length > 0);
+      // Permite vacío en var1 (idx 0). El resto obligatorio.
+      return totalToSend > 0 && vars.slice(0, varCount).every((v, i) => i === 0 ? true : String(v || "").length > 0);
     }
     if (mode === "global") {
-      return numbers.length > 0 && vars.slice(0, varCount).every((v) => String(v || "").length > 0);
+      return numbers.length > 0 && vars.slice(0, varCount).every((v, i) => i === 0 ? true : String(v || "").length > 0);
     }
     if (mode === "csv") {
-      return csvPreview.length > 0 && csvPreview.every((r) => r.phone && Array.from({ length: varCount }, (_, i) => r[`v${i + 1}`]).every((x) => (x ?? "").length > 0));
+      return csvPreview.length > 0 && csvPreview.every((r) => r.phone &&
+        Array.from({ length: varCount }, (_, i) => r[`v${i + 1}`]).every((x, i) => i === 0 ? true : (x ?? "").length > 0)
+      );
     }
     return false;
   }, [hasLockedTemplate, confirmOptIn, confirmTemplate, destMode, totalToSend, mode, numbers, vars, csvPreview, varCount]);
@@ -256,11 +365,32 @@ export default function RemarketingBulk() {
     if (!canSend || sending) return;
     setSending(true);
 
+    const MAX_PARAM_LEN = 1000;
+
+    const applyFallbackVars = (arr) =>
+      arr.slice(0, varCount).map((t, i) => {
+        let out;
+        if (i === 0) {
+          const v = String(t || "").trim();
+          const fb = v ? v : fallbackForVar1FromTemplateBody(tplBody);
+          out = fb === "" ? "\u200B" : fb; // anti “Hola Hola”
+        } else {
+          out = String(t || "");
+        }
+        if (out.length > MAX_PARAM_LEN) out = out.slice(0, MAX_PARAM_LEN - 1) + "…";
+        // ⬇️ Saneo final requerido por Meta
+        out = sanitizeParamText(out);
+        return out;
+      });
+
     const list = destMode === "tags"
-      ? tagPhones.map((phone) => ({ phone, vars: vars.slice(0, varCount) }))
+      ? tagPhonesOpt.map((phone) => ({ phone, vars: applyFallbackVars(vars) }))
       : (mode === "global"
-        ? numbers.map((phone) => ({ phone, vars: vars.slice(0, varCount) }))
-        : csvPreview.map((r) => ({ phone: r.phone, vars: Array.from({ length: varCount }, (_, i) => r[`v${i + 1}`]) }))
+        ? numbers.map((phone) => ({ phone, vars: applyFallbackVars(vars) }))
+        : csvPreview.map((r) => ({
+            phone: r.phone,
+            vars: applyFallbackVars(Array.from({ length: varCount }, (_, i) => r[`v${i + 1}`]))
+          }))
       );
 
     setRowsState(list.map((x) => ({ phone: x.phone, status: "pending" })));
@@ -269,7 +399,11 @@ export default function RemarketingBulk() {
     for (let i = 0; i < list.length; i++) {
       const { phone, vars } = list[i];
       try {
-        const components = [{ type: "body", parameters: vars.map((t) => ({ type: "text", text: String(t) })) }];
+        const components = [{
+          type: "body",
+          parameters: vars.map((t) => ({ type: "text", text: String(t) }))
+        }];
+
         await sendTemplate({ phone, components });
         setRowsState((prev) => prev.map((r) => (r.phone === phone ? { ...r, status: "ok" } : r)));
         setProgress((p) => ({ sent: p.sent + 1, ok: p.ok + 1, fail: p.fail }));
@@ -277,7 +411,7 @@ export default function RemarketingBulk() {
         setRowsState((prev) => prev.map((r) => (r.phone === phone ? { ...r, status: "fail", error: String(err?.message || err) } : r)));
         setProgress((p) => ({ sent: p.sent + 1, ok: p.ok, fail: p.fail + 1 }));
       }
-      // eslint-disable-next-line no-await-in-loop
+      // eslint-disable-next-line no-await-guard
       await sleep(delayMs || 800);
     }
 
@@ -296,7 +430,7 @@ export default function RemarketingBulk() {
         </p>
       )}
 
-      {/* Plantilla (solo lectura) */}
+      {/* Plantilla */}
       <div className="p-3 mb-4 space-y-2 rounded-lg border">
         <label className="block text-sm font-semibold">Plantilla</label>
         <div className="grid gap-2 md:grid-cols-2">
@@ -318,6 +452,9 @@ export default function RemarketingBulk() {
             <div className="mt-1 text-gray-500">
               Variables detectadas en BODY: {varCount} &nbsp;
               ({Array.from({ length: varCount }).map((_, i) => `{{${i + 1}}}`).join(", ")})
+            </div>
+            <div className="mt-1 text-xs text-gray-500">
+              Si <code>{'{{1}}'}</code> viene vacío, se enviará: <b>{getTimeGreeting()}</b> (o vacío si el cuerpo ya comienza con "Hola " + {'{{1}}'} + "").
             </div>
           </div>
         )}
@@ -361,7 +498,7 @@ export default function RemarketingBulk() {
                 <input
                   key={idx}
                   className="p-2 rounded border"
-                  placeholder={`{{${idx + 1}}}`}
+                  placeholder={`{{${idx + 1}}} ${idx === 0 ? '(opcional: nombre o saludo)' : ''}`}
                   value={vars[idx] || ""}
                   onChange={(e) => { const v = [...vars]; v[idx] = e.target.value; setVars(v); }}
                 />
@@ -374,7 +511,7 @@ export default function RemarketingBulk() {
               <input type="file" accept=".csv" ref={fileInputRef} onChange={(e) => onCsvUpload(e.target.files?.[0])} />
               <button type="button" className="px-3 py-1 rounded border" onClick={() => fileInputRef.current?.click()}>Cargar CSV</button>
             </div>
-            <p className="text-xs text-gray-600">Formato: <code>phone,var1,var2,...</code></p>
+            <p className="text-xs text-gray-600">Formato: <code>phone,var1,var2,...</code> — <b>v1 puede ir vacío</b> (usa “buen día / buenas tardes / buenas noches” automáticamente).</p>
             {csvPreview.length > 0 && (
               <div className="overflow-auto max-h-40 text-sm rounded border">
                 <table className="w-full">
@@ -407,10 +544,6 @@ export default function RemarketingBulk() {
             <input type="radio" name="dest" value="tags" checked={destMode === "tags"} onChange={() => setDestMode("tags")} />
             Por etiquetas
           </label>
-          <label className="flex gap-2 items-center text-sm">
-            <input type="radio" name="dest" value="manual" checked={destMode === "manual"} onChange={() => setDestMode("manual")} />
-            Pegar números
-          </label>
         </div>
 
         {destMode === "tags" ? (
@@ -423,27 +556,69 @@ export default function RemarketingBulk() {
               setSelectedLabels={setSelectedLabels}
             />
 
-            <div className="text-xs text-gray-600">Seleccionadas: {selectedLabels.length} · Teléfonos con opt-in: {tagPhones.length}</div>
+            <div className="text-xs text-gray-600">
+              Seleccionadas: {selectedLabels.length} ·
+              {" "}Con opt-in: {tagPhonesOpt.length}
+              {" "}({tagPhonesAll.length} total)
+            </div>
+
+            <label className="flex gap-2 items-center text-sm">
+              <input
+                type="checkbox"
+                checked={includeNoOptIn}
+                onChange={(e) => setIncludeNoOptIn(e.target.checked)}
+              />
+              Ver coincidencias <b>sin</b> opt-in (solo vista previa)
+            </label>
+
             {tagPhonesLoading ? (
-              <div className="text-sm text-gray-600">Buscando conversaciones con opt-in…</div>
-            ) : tagPhonesMeta.length > 0 ? (
-              <PreviewTable rows={tagPhonesMeta} />
+              <div className="text-sm text-gray-600">Buscando conversaciones…</div>
+            ) : (includeNoOptIn ? tagMetaAll.length : tagMetaOpt.length) > 0 ? (
+              <>
+                <PreviewTable rows={includeNoOptIn ? tagMetaAll : tagMetaOpt} />
+
+                <div className="flex flex-wrap gap-2 items-center mt-2">
+                  <button
+                    type="button"
+                    className="px-3 py-1 text-sm rounded border"
+                    onClick={() => setShowNumbers((v) => !v)}
+                  >
+                    {showNumbers ? "Ocultar números" : `Ver números (${(includeNoOptIn ? tagMetaAll.length : tagMetaOpt.length)})`}
+                  </button>
+
+                  <button
+                    type="button"
+                    className="px-3 py-1 text-sm rounded border"
+                    onClick={copyNumbersAnnotated}
+                    title="Copia teléfono + estado (lo mismo que ves)"
+                  >
+                    Copiar con estado
+                  </button>
+
+                  <button
+                    type="button"
+                    className="px-3 py-1 text-sm rounded border"
+                    onClick={copyOnlyOptIn}
+                    title="Copia solo los teléfonos que tienen opt-in=true"
+                  >
+                    Copiar solo números (opt-in)
+                  </button>
+                </div>
+
+                {showNumbers && (
+                  <textarea
+                    readOnly
+                    className="mt-2 w-full min-h-[160px] font-mono text-sm border rounded p-2"
+                    value={numbersText}
+                    placeholder="No hay coincidencias para las etiquetas seleccionadas."
+                  />
+                )}
+              </>
             ) : (
-              <div className="text-sm text-gray-600">Elegí 1+ etiquetas para listar destinatarios con opt-in.</div>
+              <div className="text-sm text-gray-600">Elegí 1+ etiquetas para listar destinatarios.</div>
             )}
           </div>
-        ) : (
-          <div className="space-y-2">
-            <label className="block text-sm font-semibold">Teléfonos destino</label>
-            <textarea
-              className="border rounded p-2 w-full min-h-[100px] font-mono"
-              placeholder={"Pegá uno por línea o separados por coma/espacio. Ej:\n+5491122334455\n+5491133344455"}
-              value={rawPhones}
-              onChange={(e) => setRawPhones(e.target.value)}
-            />
-            <div className="text-xs text-gray-600">Válidos: {numbers.length}</div>
-          </div>
-        )}
+        ) : null}
       </div>
 
       {/* Cumplimiento */}
@@ -525,7 +700,11 @@ function LabelsBlock({ labelsLoading, labelsError, allLabels, selectedLabels, se
         const on = selectedLabels.includes(l.slug);
         return (
           <label key={l.slug} className="flex gap-2 items-center text-sm">
-            <input type="checkbox" checked={on} onChange={() => setSelectedLabels((prev) => on ? prev.filter((s) => s !== l.slug) : [...prev, l.slug])} />
+            <input
+              type="checkbox"
+              checked={on}
+              onChange={() => setSelectedLabels((prev) => on ? prev.filter((s) => s !== l.slug) : [...prev, l.slug])}
+            />
             <span>{l.name || l.slug}</span>
           </label>
         );
@@ -542,6 +721,7 @@ function PreviewTable({ rows }) {
             <th className="p-1 text-left">Teléfono (E.164)</th>
             <th className="p-1 text-left">Último mensaje</th>
             <th className="p-1 text-left">Etiquetas</th>
+            <th className="p-1 text-left">Opt-in</th>
           </tr>
         </thead>
         <tbody>
@@ -550,6 +730,7 @@ function PreviewTable({ rows }) {
               <td className="p-1 font-mono">{r.phone}</td>
               <td className="p-1">{r.lastMessageAt ? new Date(r.lastMessageAt).toLocaleString() : "—"}</td>
               <td className="p-1">{(Array.isArray(r.labels) ? r.labels : []).join(", ")}</td>
+              <td className="p-1">{r.optIn ? "✓" : "—"}</td>
             </tr>
           ))}
         </tbody>
