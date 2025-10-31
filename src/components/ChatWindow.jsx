@@ -119,7 +119,7 @@ function formatTs(ts) {
 
 
 
-
+// eslint-disable-next-line no-unused-vars
 function emailHandle(v) {
   const s = String(v || "");
   const i = s.indexOf("@");
@@ -127,6 +127,7 @@ function emailHandle(v) {
 }
 
 // Limpia nombres tipo "hola hola", "¡hola!" etc.
+// eslint-disable-next-line no-unused-vars
 function cleanClientName(n) {
   let s = String(n || "").trim();
   // sacamos saludos iniciales repetidos y signos
@@ -174,6 +175,7 @@ const getSellerDisplayName = (user = {}) => {
 };
 
 // evita parámetros vacíos que disparan 131008
+// eslint-disable-next-line no-unused-vars
 const safeParam = (v) => {
   const s = (v ?? "").toString();
   return s.trim() ? s : "\u200B"; // Zero-Width Space
@@ -383,7 +385,7 @@ function LocationBubble({ m }) {
           <img
             src={staticUrl}
             alt="Mapa de ubicación"
-            className="w-full h-auto rounded-lg border border-black/10"
+            className="w-full h-auto border rounded-lg border-black/10"
             loading="lazy"
             referrerPolicy="no-referrer"
             onError={() => setImgError(true)}
@@ -686,7 +688,8 @@ const toggleLabel = async (slug) => {
       });
 
       // Verificar si hay más mensajes disponibles
-      const totalMessages = a.length + b.length; // eslint-disable-line @typescript-eslint/no-unused-vars
+      // eslint-disable-next-line no-unused-vars
+      const totalMessages = a.length + b.length;
       const uniqueMessages = arr.length;
       setHasMoreMessages(uniqueMessages >= messageLimit && (a.length === messageLimit || b.length === messageLimit));
 
@@ -1084,6 +1087,7 @@ const toggleLabel = async (slug) => {
   };
 
   // adjuntos (atajo de picker → sube y envía)
+  // eslint-disable-next-line no-unused-vars
   const handlePickAndSend = async (file, kind /* "image" | "audio" | "document" */) => {
     if (!file || !conversationId || !canWrite) return;
     try {
@@ -1189,7 +1193,7 @@ const toggleLabel = async (slug) => {
 
   if (!canRead) {
     return (
-      <div className="flex justify-center items-center h-full text-sm text-gray-600">
+      <div className="flex items-center justify-center h-full text-sm text-gray-600">
         No tenés acceso a este chat. Asignate desde la lista.
       </div>
     );
@@ -1232,8 +1236,8 @@ const toggleLabel = async (slug) => {
       <header className="sticky top-0 z-40 border-b bg-[#E8F5E9]/90 border-[#CDEBD6] backdrop-blur">
         <div className="px-3 pt-2 pb-2 md:px-4">
           {/* Fila 1 */}
-          <div className="flex flex-wrap gap-2 justify-between items-center">
-            <div className="flex gap-2 items-center min-w-0">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center min-w-0 gap-2">
               {onBack && (
                 <button
                   className="btn btn-xs md:hidden"
@@ -1261,8 +1265,8 @@ const toggleLabel = async (slug) => {
           </div>
 
           {/* Fila 2: Toolbar */}
-          <div className="overflow-x-auto -mx-1 mt-2 no-scrollbar">
-            <div className="flex gap-2 items-center px-1 snap-x snap-mandatory">
+          <div className="mt-2 -mx-1 overflow-x-auto no-scrollbar">
+            <div className="flex items-center gap-2 px-1 snap-x snap-mandatory">
               {/* Plantillas (icon-only) */}
               <div className="snap-start shrink-0">
                 <TemplatesPicker
@@ -1377,7 +1381,7 @@ const toggleLabel = async (slug) => {
         {tab === "chat" ? (
           <main
             ref={viewportRef}
-            className="overflow-y-auto overflow-x-hidden flex-1 px-3 py-3 md:px-4 md:py-4"
+            className="flex-1 px-3 py-3 overflow-x-hidden overflow-y-auto md:px-4 md:py-4"
           >
             {/* Botón para cargar más mensajes antiguos */}
             {hasMoreMessages && msgs.length > 0 && (
@@ -1397,7 +1401,7 @@ const toggleLabel = async (slug) => {
               </div>
             )}
 
-            <div className="flex flex-col gap-2 mx-auto w-full max-w-none">
+            <div className="flex flex-col w-full gap-2 mx-auto max-w-none">
               {msgs.map((m) => {
                 const isOut = isOutgoingMessage(m, user);
 
@@ -1473,7 +1477,7 @@ const toggleLabel = async (slug) => {
                             <img
                               src={mediaUrl}
                               alt="Imagen"
-                              className="object-cover w-44 h-44 rounded-lg md:w-52 md:h-52 cursor-zoom-in"
+                              className="object-cover rounded-lg w-44 h-44 md:w-52 md:h-52 cursor-zoom-in"
                               loading="lazy"
                               onClick={() => setImagePreviewUrl(mediaUrl)}
                               onError={(e) => {
@@ -1516,7 +1520,7 @@ const toggleLabel = async (slug) => {
                                   }`}
                                   title="Abrir en pestaña nueva"
                                 >
-                                  <ExternalLink className="mr-1 w-3 h-3" />
+                                  <ExternalLink className="w-3 h-3 mr-1" />
                                   Abrir
                                 </a>
                                 {visibleText ? (
@@ -1574,7 +1578,7 @@ const toggleLabel = async (slug) => {
                             ) : null}
                           </div>
                         ) : effectiveType === "sticker" ? (
-                          <div className="flex flex-col gap-2 items-center">
+                          <div className="flex flex-col items-center gap-2">
                             {resolveMediaUrl(m) ? (
                               <img
                                 src={resolveMediaUrl(m)}
@@ -1634,7 +1638,7 @@ const toggleLabel = async (slug) => {
                             ) : null}
                           </div>
                         ) : (
-                          <div className="leading-relaxed whitespace-pre-wrap break-words">
+                          <div className="leading-relaxed break-words whitespace-pre-wrap">
                             {visibleText}
                             {m.status === "error" && (
                               <div
@@ -1655,7 +1659,7 @@ const toggleLabel = async (slug) => {
                         )}
 
                         {/* Acciones y timestamp */}
-                        <div className="flex gap-2 justify-between items-center mt-2">
+                        <div className="flex items-center justify-between gap-2 mt-2">
                           <div
                             className={`text-xs ${
                               isOut ? "text-white/80" : "text-gray-500"
@@ -1663,7 +1667,7 @@ const toggleLabel = async (slug) => {
                           >
                             {formatTs(m.timestamp)}
                           </div>
-                          <div className="flex gap-1 items-center">
+                          <div className="flex items-center gap-1">
                             {canWrite && (
                               <StarButton
                                 chatId={conversationId}
@@ -1713,7 +1717,7 @@ const toggleLabel = async (slug) => {
                               onChange={(e) => setEditingText(e.target.value)}
                               placeholder="Editar texto/caption…"
                             />
-                            <div className="flex gap-2 justify-end mt-2">
+                            <div className="flex justify-end gap-2 mt-2">
                               <button
                                 className={`btn btn-xs ${isOut ? "text-white bg-white/20 border-white/40" : ""}`}
                                 onClick={cancelEditMessage}
@@ -1739,7 +1743,7 @@ const toggleLabel = async (slug) => {
             </div>
           </main>
         ) : (
-          <main className="overflow-y-auto flex-1 px-3 py-3 md:px-4 md:py-4">
+          <main className="flex-1 px-3 py-3 overflow-y-auto md:px-4 md:py-4">
             <ChatDestacadosPanel chatId={conversationId} />
           </main>
         )}
@@ -1748,16 +1752,16 @@ const toggleLabel = async (slug) => {
       {/* Input */}
       <div className="border-t border-[#CDEBD6] bg-[#F6FBF7]">
         <div className="px-3 py-3 md:px-4">
-          <div className="flex flex-col gap-2 mx-auto w-full max-w-none">
+          <div className="flex flex-col w-full gap-2 mx-auto max-w-none">
             <QuickRepliesBar onPick={onPickQuick} />
 
             <div className="relative flex items-end gap-2 rounded-xl border border-[#CDEBD6] bg-white p-2 shadow-sm">
               {/* Mostrar archivos seleccionados */}
               {(selectedImage || selectedAudio || selectedDoc) && (
                 <div className="absolute -top-16 left-0 right-0 bg-white border border-[#CDEBD6] rounded-lg p-2 shadow-sm">
-                  <div className="flex gap-2 items-center text-sm text-gray-600">
+                  <div className="flex items-center gap-2 text-sm text-gray-600">
                     {selectedImage && (
-                      <div className="flex gap-2 items-center px-2 py-1 bg-blue-50 rounded">
+                      <div className="flex items-center gap-2 px-2 py-1 rounded bg-blue-50">
                         <ImageIcon className="w-4 h-4 text-blue-600" />
                         <span className="truncate max-w-32">{selectedImage.name}</span>
                         <button
@@ -1770,7 +1774,7 @@ const toggleLabel = async (slug) => {
                       </div>
                     )}
                     {selectedAudio && (
-                      <div className="flex gap-2 items-center px-2 py-1 bg-green-50 rounded">
+                      <div className="flex items-center gap-2 px-2 py-1 rounded bg-green-50">
                         <FileAudio2 className="w-4 h-4 text-green-600" />
                         <span className="truncate max-w-32">{selectedAudio.name}</span>
                         <button
@@ -1783,7 +1787,7 @@ const toggleLabel = async (slug) => {
                       </div>
                     )}
                     {selectedDoc && (
-                      <div className="flex gap-2 items-center px-2 py-1 bg-purple-50 rounded">
+                      <div className="flex items-center gap-2 px-2 py-1 rounded bg-purple-50">
                         <FileText className="w-4 h-4 text-purple-600" />
                         <span className="truncate max-w-32">{selectedDoc.name}</span>
                         <button
@@ -1842,7 +1846,7 @@ const toggleLabel = async (slug) => {
                     className="absolute bottom-[110%] left-0 z-50 rounded-xl border border-[#CDEBD6] bg-white shadow-md p-1 w-40"
                   >
                     <button
-                      className="gap-2 justify-start w-full btn btn-ghost btn-sm"
+                      className="justify-start w-full gap-2 btn btn-ghost btn-sm"
                       onClick={() => imageInputRef.current?.click()}
                       disabled={!canWrite || sending}
                     >
@@ -1850,7 +1854,7 @@ const toggleLabel = async (slug) => {
                       Imagen
                     </button>
                     <button
-                      className="gap-2 justify-start w-full btn btn-ghost btn-sm"
+                      className="justify-start w-full gap-2 btn btn-ghost btn-sm"
                       onClick={() => audioInputRef.current?.click()}
                       disabled={!canWrite || sending}
                     >
@@ -1858,7 +1862,7 @@ const toggleLabel = async (slug) => {
                       Audio
                     </button>
                     <button
-                      className="gap-2 justify-start w-full btn btn-ghost btn-sm"
+                      className="justify-start w-full gap-2 btn btn-ghost btn-sm"
                       onClick={() => docInputRef.current?.click()}
                       disabled={!canWrite || sending}
                     >
@@ -1879,7 +1883,7 @@ const toggleLabel = async (slug) => {
               {/* Reply chip over input */}
               {replyTo && (
                 <div className="absolute -top-9 left-0 right-0 flex items-center justify-between px-3 py-1 rounded-md border bg-white border-[#CDEBD6] text-sm">
-                  <div className="flex gap-2 items-center min-w-0">
+                  <div className="flex items-center min-w-0 gap-2">
                     <CornerUpLeft className="w-4 h-4 text-[#2E7D32]" />
                     <span className="truncate">
                       {(
@@ -2044,7 +2048,7 @@ const toggleLabel = async (slug) => {
               Cerrar
             </button>
           </div>
-          <div className="overflow-auto p-3 h-full">
+          <div className="h-full p-3 overflow-auto">
             <ClientProfile
               contactId={contactId}
               phone={phone}
@@ -2092,7 +2096,7 @@ fixed inset-0 z-[95] bg-black/70 grid place-items-center p-4"
             className="w-full max-w-lg md:max-w-2xl lg:max-w-4xl max-h-[90vh] overflow-hidden rounded-xl shadow-xl bg-base-100"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex justify-between items-center p-3 border-b">
+            <div className="flex items-center justify-between p-3 border-b">
               <h3 className="font-semibold">Etiquetas</h3>
               <button
                 className="btn btn-ghost btn-sm"

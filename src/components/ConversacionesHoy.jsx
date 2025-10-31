@@ -16,7 +16,6 @@ import { db } from "../firebase.js"; // 👈 ajustá la ruta a tu proyecto
 import { format } from "date-fns";
 
 function startEndOfDayInLocalTZ(date) {
-  // Usa la TZ local del navegador (AR -03:00 en tu caso)
   const y = date.getFullYear();
   const m = date.getMonth();
   const d = date.getDate();
@@ -25,7 +24,6 @@ function startEndOfDayInLocalTZ(date) {
   return { start, end };
 }
 
-// Date -> Firestore Timestamp
 const ts = (date) => Timestamp.fromDate(date);
 
 function toCSV(rows) {
@@ -51,26 +49,27 @@ function toCSV(rows) {
 
 export default function ConversacionesHoy({
   collectionName = "conversations",
-  pageLimit = 200, // subí si hace falta
+  pageLimit = 200, // fetch máximo por día
 }) {
-  // Fecha seleccionada (por defecto hoy)
   const [selectedDate, setSelectedDate] = useState(() => new Date());
   const [{ start, end }, setRange] = useState(() =>
     startEndOfDayInLocalTZ(new Date()),
   );
 
   const [loading, setLoading] = useState(true);
-  const [nuevasHoy, setNuevasHoy] = useState([]); // firstInboundAt/createdAt en el día elegido
-  const [activasHoy, setActivasHoy] = useState([]); // lastInboundAt en el día elegido
+  const [nuevasHoy, setNuevasHoy] = useState([]);
+  const [activasHoy, setActivasHoy] = useState([]);
   const [modo, setModo] = useState("nuevas"); // "nuevas" | "activas"
   const [search, setSearch] = useState("");
 
-  // Cada vez que cambia selectedDate, recalculamos el rango
+  // 🔸 Paginado cliente fijo en 10 por página
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 10; // ⬅️ fijo en 10
+
   useEffect(() => {
     setRange(startEndOfDayInLocalTZ(selectedDate));
   }, [selectedDate]);
 
-  // Cargar datos cuando cambian: colección o fecha (rango start/end)
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -78,8 +77,6 @@ export default function ConversacionesHoy({
       try {
         const colRef = collection(db, collectionName);
 
-        // 1) NUEVAS del día = firstInboundAt en [start, end]
-        //    Fallback: createdAt en [start, end] (históricos que aún no tienen firstInboundAt)
         const qNuevasPrimeraVez = query(
           colRef,
           where("firstInboundAt", ">=", ts(start)),
@@ -102,10 +99,8 @@ export default function ConversacionesHoy({
 
         const arrN = [...snapN1.docs, ...snapN2.docs]
           .map((d) => ({ id: d.id, ...d.data() }))
-          // dedupe por id si vino en ambas consultas
           .reduce((acc, x) => (acc.some((y) => y.id === x.id) ? acc : [...acc, x]), []);
 
-        // 2) ACTIVAS del día = lastInboundAt en [start, end]
         const qActivas = query(
           colRef,
           where("lastInboundAt", ">=", ts(start)),
@@ -130,6 +125,11 @@ export default function ConversacionesHoy({
     };
   }, [collectionName, start, end, pageLimit]);
 
+  // Reset page al cambiar filtros
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [modo, selectedDate, search]);
+
   const rows = useMemo(() => {
     const base = modo === "nuevas" ? nuevasHoy : activasHoy;
 
@@ -148,7 +148,6 @@ export default function ConversacionesHoy({
         })
       : base;
 
-    // Orden: nuevas => firstInboundAt/createdAt desc, activas => lastInboundAt desc
     const sorted = [...afterSearch].sort((a, b) => {
       const fa =
         modo === "nuevas"
@@ -171,6 +170,16 @@ export default function ConversacionesHoy({
       unicos: uniques.size,
     };
   }, [rows]);
+
+  const totalPages = useMemo(
+    () => Math.max(1, Math.ceil(rows.length / pageSize)),
+    [rows.length, pageSize],
+  );
+
+  const pagedRows = useMemo(() => {
+    const startIdx = (currentPage - 1) * pageSize;
+    return rows.slice(startIdx, startIdx + pageSize);
+  }, [rows, currentPage, pageSize]);
 
   function handleExport() {
     const compact = rows.map((r) => ({
@@ -205,124 +214,252 @@ export default function ConversacionesHoy({
 
   const dateStr = format(selectedDate, "yyyy-MM-dd");
 
-  return (
-    <div className="space-y-4 w-full">
-      <div className="flex flex-wrap gap-2 items-center">
-        <div className="text-lg font-semibold">
-          Conversaciones del día ({dateStr})
-        </div>
+  // Helpers paginación
+  const goToPage = (p) => setCurrentPage(Math.min(Math.max(1, p), totalPages));
+  const Pagination = () => {
+    // 10 botones numerados visibles
+    const windowSize = 10;
+    const half = Math.floor(windowSize / 2);
 
-        {/* Selector de fecha (calendario nativo) */}
-        <label className="ml-2 text-sm opacity-80">Fecha:</label>
-        <input
-          type="date"
-          className="input input-bordered input-sm"
-          value={dateStr}
-          onChange={(e) => {
-            const v = e.target.value; // yyyy-MM-dd
-            if (!v) return;
-            const [yy, mm, dd] = v.split("-").map((x) => parseInt(x, 10));
-            // new Date(año, mes-1, día) en TZ local
-            setSelectedDate(new Date(yy, mm - 1, dd));
-          }}
-        />
+    let startP = Math.max(1, currentPage - half);
+    let endP = Math.min(totalPages, startP + windowSize - 1);
+    if (endP - startP + 1 < windowSize) {
+      startP = Math.max(1, endP - windowSize + 1);
+    }
 
-        <div className="flex gap-2 items-center ml-auto">
-          <select
-            className="select select-bordered select-sm"
-            value={modo}
-            onChange={(e) => setModo(e.target.value)}
-            title="Modo de vista"
+    const pages = [];
+    for (let p = startP; p <= endP; p++) pages.push(p);
+
+    return (
+      <div className="join">
+        <button
+          className="join-item btn btn-xs"
+          onClick={() => goToPage(currentPage - 1)}
+          disabled={currentPage <= 1}
+        >
+          «
+        </button>
+
+        {startP > 1 && (
+          <>
+            <button className="join-item btn btn-xs" onClick={() => goToPage(1)}>
+              1
+            </button>
+            {startP > 2 && <button className="join-item btn btn-xs btn-ghost">…</button>}
+          </>
+        )}
+
+        {pages.map((p) => (
+          <button
+            key={p}
+            className={`join-item btn btn-xs ${p === currentPage ? "btn-primary" : ""}`}
+            onClick={() => goToPage(p)}
           >
-            <option value="nuevas">Nuevas (firstInboundAt/createdAt)</option>
-            <option value="activas">Activas (lastInboundAt)</option>
-          </select>
-
-          <input
-            className="input input-bordered input-sm"
-            placeholder="Buscar número, texto, vendedor…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{ width: 260 }}
-          />
-
-          <button className="btn btn-sm" onClick={handleExport}>
-            Exportar CSV
+            {p}
           </button>
-        </div>
+        ))}
+
+        {endP < totalPages && (
+          <>
+            {endP < totalPages - 1 && <button className="join-item btn btn-xs btn-ghost">…</button>}
+            <button className="join-item btn btn-xs" onClick={() => goToPage(totalPages)}>
+              {totalPages}
+            </button>
+          </>
+        )}
+
+        <button
+          className="join-item btn btn-xs"
+          onClick={() => goToPage(currentPage + 1)}
+          disabled={currentPage >= totalPages}
+        >
+          »
+        </button>
+      </div>
+    );
+  };
+
+  return (
+    <div className="w-full space-y-6">
+      {/* HEADER */}
+      <div className="flex flex-col gap-1">
+        <h2 className="text-2xl font-bold tracking-tight md:text-3xl">
+          Conversaciones del día
+        </h2>
+        <p className="text-sm opacity-70">
+          {dateStr} • <b>Nuevas</b> usa <code>firstInboundAt</code> (fallback{" "}
+          <code>createdAt</code>). <b>Activas</b> usa <code>lastInboundAt</code>.
+        </p>
       </div>
 
-      <div className="shadow stats">
-        <div className="stat">
-          <div className="stat-title">Total</div>
-          <div className="stat-value text-primary">{counters.total}</div>
-          <div className="stat-desc">
-            Únicos: <b>{counters.unicos}</b>
+      {/* CONTROLES + ACCIONES */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        {/* Modo */}
+        <div className="border shadow-sm card bg-base-100 border-base-300">
+          <div className="p-4 card-body">
+            <div className="flex items-center justify-between">
+              <span className="font-medium">Vista</span>
+              <div className="join">
+                <button
+                  className={`btn btn-sm join-item ${
+                    modo === "nuevas" ? "btn-primary" : "btn-ghost"
+                  }`}
+                  onClick={() => setModo("nuevas")}
+                >
+                  Nuevas
+                </button>
+                <button
+                  className={`btn btn-sm join-item ${
+                    modo === "activas" ? "btn-primary" : "btn-ghost"
+                  }`}
+                  onClick={() => setModo("activas")}
+                >
+                  Activas
+                </button>
+              </div>
+            </div>
+            <p className="mt-2 text-xs opacity-70">
+              Cambiá entre conversaciones <b>Nuevas</b> y <b>Activas</b> del día.
+            </p>
+          </div>
+        </div>
+
+        {/* Fecha */}
+        <div className="border shadow-sm card bg-base-100 border-base-300">
+          <div className="p-4 card-body">
+            <label className="mb-2 text-sm font-medium">Fecha</label>
+            <input
+              type="date"
+              className="w-full input input-sm input-bordered"
+              value={format(selectedDate, "yyyy-MM-dd")}
+              onChange={(e) => setSelectedDate(new Date(e.target.value))}
+            />
+            <p className="mt-2 text-xs opacity-70">
+              Mostrando resultados de <b>{dateStr}</b>.
+            </p>
+          </div>
+        </div>
+
+        {/* Buscar + Exportar */}
+        <div className="border shadow-sm card bg-base-100 border-base-300">
+          <div className="p-4 card-body">
+            <label className="mb-2 text-sm font-medium">Buscar</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                className="w-full input input-sm input-bordered"
+                placeholder="Número, texto, vendedor…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              <button className="btn btn-sm btn-outline" onClick={handleExport} title="Exportar CSV">
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 3a1 1 0 011 1v8.586l2.293-2.293a1 1 0 011.414 1.414l-4.001 4a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L11 12.586V4a1 1 0 011-1z" />
+                  <path d="M5 20a2 2 0 01-2-2v-2a1 1 0 112 0v2h14v-2a1 1 0 112 0v2a2 2 0 01-2 2H5z" />
+                </svg>
+                <span className="hidden ml-1 sm:inline">CSV</span>
+              </button>
+            </div>
+            {/* pageSize fijo en 10: no se muestra selector */}
           </div>
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-lg border border-base-300">
-        <table className="table table-zebra table-sm">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Número</th>
-              <th>Vendedor</th>
-              <th>1er Inbound</th>
-              <th>Created</th>
-              <th>Last Inbound</th>
-              <th>Último Texto</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading && (
-              <tr>
-                <td colSpan={7} className="opacity-70">
-                  Cargando…
-                </td>
-              </tr>
-            )}
-            {!loading && rows.length === 0 && (
-              <tr>
-                <td colSpan={7} className="opacity-70">
-                  Sin resultados para el día seleccionado.
-                </td>
-              </tr>
-            )}
-            {!loading &&
-              rows.map((c, i) => {
-                const firstInboundStr = c.firstInboundAt?.toDate
-                  ? format(c.firstInboundAt.toDate(), "HH:mm:ss")
-                  : "-";
-                const createdStr = c.createdAt?.toDate
-                  ? format(c.createdAt.toDate(), "HH:mm:ss")
-                  : "-";
-                const inboundStr = c.lastInboundAt?.toDate
-                  ? format(c.lastInboundAt.toDate(), "HH:mm:ss")
-                  : "-";
-                return (
-                  <tr key={c.id}>
-                    <td>{i + 1}</td>
-                    <td className="font-mono">{c.contactId || "-"}</td>
-                    <td>{c.assignedToName || c.assignedToEmail || "-"}</td>
-                    <td>{firstInboundStr}</td>
-                    <td>{createdStr}</td>
-                    <td>{inboundStr}</td>
-                    <td className="max-w-[360px] truncate">
-                      {c.lastMessageText || "-"}
-                    </td>
-                  </tr>
-                );
-              })}
-          </tbody>
-        </table>
+      {/* STATS */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="border shadow stats bg-base-100 border-base-300">
+          <div className="stat">
+            <div className="stat-title">Total {modo === "nuevas" ? "Nuevas" : "Activas"}</div>
+            <div className="stat-value text-primary">{counters.total}</div>
+            <div className="stat-desc">Conversaciones listadas</div>
+          </div>
+        </div>
+        <div className="border shadow stats bg-base-100 border-base-300">
+          <div className="stat">
+            <div className="stat-title">Únicos</div>
+            <div className="stat-value">{counters.unicos}</div>
+            <div className="stat-desc">Por contactId / id</div>
+          </div>
+        </div>
       </div>
 
-      <p className="text-xs opacity-70">
-        “Nuevas” usa <code>firstInboundAt</code> (y cae a <code>createdAt</code> si el
-        histórico no lo tiene). “Activas” usa <code>lastInboundAt</code>.
-      </p>
+      {/* TABLA */}
+      <div className="border shadow-sm card bg-base-100 border-base-300">
+        <div className="p-0 card-body">
+          <div className="overflow-x-auto rounded-lg">
+            <table className="table table-sm">
+              <thead className="sticky top-0 z-10 bg-base-200/90 backdrop-blur supports-[backdrop-filter]:bg-base-200/60">
+                <tr>
+                  <th className="w-12">#</th>
+                  <th className="min-w-[160px]">Número</th>
+                  <th className="min-w-[160px]">Vendedor</th>
+                  <th className="min-w-[120px]">1er Inbound</th>
+                  <th className="min-w-[120px]">Created</th>
+                  <th className="min-w-[120px]">Last Inbound</th>
+                  <th className="min-w-[360px]">Último Texto</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading && (
+                  <tr>
+                    <td colSpan={7} className="opacity-70">Cargando…</td>
+                  </tr>
+                )}
+                {!loading && pagedRows.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="opacity-70">Sin resultados para el día seleccionado.</td>
+                  </tr>
+                )}
+                {!loading && pagedRows.map((c, i) => {
+                  const firstInboundStr = c.firstInboundAt?.toDate
+                    ? format(c.firstInboundAt.toDate(), "HH:mm:ss")
+                    : "-";
+                  const createdStr = c.createdAt?.toDate
+                    ? format(c.createdAt.toDate(), "HH:mm:ss")
+                    : "-";
+                  const inboundStr = c.lastInboundAt?.toDate
+                    ? format(c.lastInboundAt.toDate(), "HH:mm:ss")
+                    : "-";
+                  return (
+                    <tr key={c.id} className="hover">
+                      <td>{(currentPage - 1) * pageSize + i + 1}</td>
+                      <td className="font-mono">{c.contactId || "-"}</td>
+                      <td>
+                        {c.assignedToName ? (
+                          <span className="badge badge-ghost">{c.assignedToName}</span>
+                        ) : c.assignedToEmail ? (
+                          <span className="badge badge-ghost">{c.assignedToEmail}</span>
+                        ) : ("-")}
+                      </td>
+                      <td>{firstInboundStr}</td>
+                      <td>{createdStr}</td>
+                      <td>{inboundStr}</td>
+                      <td className="max-w-[520px]">
+                        <span className="line-clamp-1">{c.lastMessageText || "-"}</span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Footer tabla con paginación */}
+          <div className="flex flex-col gap-3 p-3 text-xs border-t border-base-300 sm:flex-row sm:items-center sm:justify-between">
+            <span className="opacity-70">
+              Mostrando <b>{pagedRows.length}</b> de <b>{rows.length}</b> filas • Página <b>{currentPage}</b> de <b>{totalPages}</b> • {modo === "nuevas" ? "Nuevas" : "Activas"} del <b>{dateStr}</b>
+            </span>
+            <div className="flex items-center gap-3">
+              <button className="btn btn-xs" onClick={() => goToPage(1)} disabled={currentPage === 1}>Primero</button>
+              <button className="btn btn-xs" onClick={() => goToPage(currentPage - 1)} disabled={currentPage === 1}>Anterior</button>
+              <Pagination />
+              <button className="btn btn-xs" onClick={() => goToPage(currentPage + 1)} disabled={currentPage === totalPages}>Siguiente</button>
+              <button className="btn btn-xs" onClick={() => goToPage(totalPages)} disabled={currentPage === totalPages}>Último</button>
+              <button className="btn btn-xs btn-outline" onClick={handleExport}>Exportar CSV</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

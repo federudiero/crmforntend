@@ -33,7 +33,6 @@ function parseLocalYMD(s) {
 function tsToMs(ts) {
   if (!ts) return 0;
   if (typeof ts === "number") {
-    // si es 10 dígitos, epoch s → ms
     return ts < 1e12 ? ts * 1000 : ts;
   }
   if (typeof ts === "string") {
@@ -68,7 +67,7 @@ function downloadCSV(filename, csv) {
 function MiniStatCard({ title, value, from = "#eef2ff", to = "#e0e7ff", text = "#1e293b", subtitle }) {
   return (
     <div
-      className="p-4 rounded-2xl border shadow-lg"
+      className="p-4 border shadow-lg rounded-2xl"
       style={{ background: `linear-gradient(135deg, ${from}, ${to})`, borderColor: "rgba(148,163,184,.35)" }}
     >
       <div className="text-xs font-semibold tracking-wide uppercase" style={{ color: "#334155" }}>
@@ -206,8 +205,8 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
     }, () => setLoading(false));
 
     return () => {
-      try { unsubUser && unsubUser(); } catch {}
-      try { unsubWaba && unsubWaba(); } catch {}
+      try { unsubUser && unsubUser(); } catch (e){console.error(e)}
+      try { unsubWaba && unsubWaba(); } catch (e){console.error(e)}
     };
   }, [vendorUid]);
 
@@ -225,7 +224,7 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
             try {
               const c = await getDoc(doc(db, "contacts", d.id));
               contact = c.exists() ? c.data() : null;
-            } catch {}
+            } catch (e){console.error(e)}
             return { id: d.id, ...d.data(), contact };
           })
         );
@@ -326,7 +325,7 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
     downloadCSV(`conversaciones_por_etiqueta_${suffix}.csv`, toCSV(pairs, ["etiqueta","conversaciones"]));
   };
 
-  const isOnline = calcOnline(vendor);
+
 
   // Días en rango
   const diasEnRango = useMemo(() => {
@@ -335,14 +334,13 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
     return Math.max(1, Math.round((b - a) / 86400000) + 1);
   }, [from, to]);
 
-  /* ========== ⏱️ Tiempo de respuesta (FIX: ordenar por timestamp con fallback) ========== */
+  /* ========== ⏱️ Tiempo de respuesta (FIX de sintaxis y orden por timestamp) ========== */
   useEffect(() => {
     let cancelled = false;
 
-    // timestamp robusto por mensaje
     const getMsgTime = (m) =>
       tsToMs(
-        m?.timestamp       // ✅ primero timestamp (es el que guarda el backend)
+        m?.timestamp
         || m?.createdAt
         || m?.sentAt
         || m?.ts
@@ -358,7 +356,7 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
       m?.role === "user" ||
       m?.type === "incoming";
 
-    const isOutboundByVendor = (m, c) => {
+    const isOutboundByVendor = (m) => {
       const uid = m?.senderUid || m?.userUid || m?.ownerUid || m?.agentUid || m?.createdBy;
       const outbound =
         m?.direction === "out" ||
@@ -371,39 +369,39 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
     };
 
     async function fetchMsgsForConversation(c) {
-      // 1) Subcolección estándar: intentar timestamp, luego createdAt
+      // 1) Subcolección estándar
       try {
         const ref1 = collection(db, "conversations", c.id, "messages");
         let arr = [];
         try {
-          const s = await getDocs(query(ref1, orderBy("timestamp", "asc"))); // ✅
+          const s = await getDocs(query(ref1, orderBy("timestamp", "asc")));
           s.forEach(d => arr.push({ id: d.id, ...d.data() }));
         } catch {
-          const s = await getDocs(query(ref1, orderBy("createdAt", "asc")));   // fallback
+          const s = await getDocs(query(ref1, orderBy("createdAt", "asc")));
           s.forEach(d => arr.push({ id: d.id, ...d.data() }));
         }
         if (arr.length) {
           arr.sort((a,b)=>getMsgTime(a)-getMsgTime(b));
           return arr;
         }
-      } catch {}
+      } catch (e){console.error(e)}
 
       // 2) Top-level messages con conversationId
       try {
         const ref2 = collection(db, "messages");
         let arr2 = [];
         try {
-          const s2 = await getDocs(query(ref2, where("conversationId", "==", c.id), orderBy("timestamp", "asc"))); // ✅
+          const s2 = await getDocs(query(ref2, where("conversationId", "==", c.id), orderBy("timestamp", "asc")));
           s2.forEach(d => arr2.push({ id: d.id, ...d.data() }));
         } catch {
-          const s2 = await getDocs(query(ref2, where("conversationId", "==", c.id), orderBy("createdAt", "asc")));  // fallback
+          const s2 = await getDocs(query(ref2, where("conversationId", "==", c.id), orderBy("createdAt", "asc")));
           s2.forEach(d => arr2.push({ id: d.id, ...d.data() }));
         }
         if (arr2.length) {
           arr2.sort((a,b)=>getMsgTime(a)-getMsgTime(b));
           return arr2;
         }
-      } catch {}
+      } catch (e){ console.error(e); }
 
       // 3) Resolver por array de ids en la conversación (en chunks de 10)
       try {
@@ -421,7 +419,7 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
             return all;
           }
         }
-      } catch {}
+      } catch (e) { console.error(e); }
 
       return [];
     }
@@ -482,7 +480,7 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
     <div className="min-h-screen bg-gradient-to-br via-amber-50 to-orange-100 from-slate-50">
       <div className="p-6 mx-auto space-y-8 max-w-7xl">
         {/* Header */}
-        <div className="flex justify-between items-center">
+        <div className="flex items-center justify-between">
           <div className="space-y-1">
             <h1 className="text-3xl font-bold text-slate-900">Detalle de vendedor</h1>
             <div className="text-sm text-slate-600">
@@ -503,19 +501,19 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
             </div>
           </div>
           {onBack && (
-            <button className="px-4 py-2 bg-white rounded-xl border shadow hover:bg-slate-50" onClick={onBack}>
+            <button className="px-4 py-2 bg-white border shadow rounded-xl hover:bg-slate-50" onClick={onBack}>
               ← Volver
             </button>
           )}
         </div>
 
         {/* Filtros */}
-        <div className="p-4 rounded-2xl border shadow bg-white/90">
-          <div className="flex flex-wrap gap-4 items-end">
+        <div className="p-4 border shadow rounded-2xl bg-white/90">
+          <div className="flex flex-wrap items-end gap-4">
             <div className="space-y-1">
               <label className="text-sm font-medium text-slate-700">Período</label>
               <select
-                className="px-3 py-2 rounded-xl border border-slate-200 bg-white/80"
+                className="px-3 py-2 border rounded-xl border-slate-200 bg-white/80"
                 value={mode}
                 onChange={(e) => setMode(e.target.value)}
               >
@@ -537,7 +535,7 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
                   <label className="text-sm font-medium text-slate-700">Desde</label>
                   <input
                     type="date"
-                    className="px-3 py-2 rounded-xl border border-slate-200 bg-white/80"
+                    className="px-3 py-2 border rounded-xl border-slate-200 bg-white/80"
                     value={from}
                     onChange={(e) => setFrom(e.target.value)}
                   />
@@ -546,7 +544,7 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
                   <label className="text-sm font-medium text-slate-700">Hasta</label>
                   <input
                     type="date"
-                    className="px-3 py-2 rounded-xl border border-slate-200 bg-white/80"
+                    className="px-3 py-2 border rounded-xl border-slate-200 bg-white/80"
                     value={to}
                     onChange={(e) => setTo(e.target.value)}
                   />
@@ -559,7 +557,7 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
               <input
                 type="text"
                 placeholder="Buscar por id o nombre de contacto…"
-                className="px-3 py-2 w-full rounded-xl border border-slate-200 bg-white/80"
+                className="w-full px-3 py-2 border rounded-xl border-slate-200 bg-white/80"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
               />
@@ -592,21 +590,21 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
 
             <div className="flex gap-2 ml-auto">
               <button
-                className="px-4 py-2 text-white bg-gradient-to-r rounded-xl shadow from-slate-600 to-slate-700"
+                className="px-4 py-2 text-white shadow bg-gradient-to-r rounded-xl from-slate-600 to-slate-700"
                 onClick={() => { setMode("today"); setQ(""); setLabelFilter([]); }}
                 title="Poner filtros en Hoy"
               >
                 Hoy
               </button>
               <button
-                className="px-4 py-2 text-white bg-gradient-to-r rounded-xl shadow from-slate-500 to-slate-600"
+                className="px-4 py-2 text-white shadow bg-gradient-to-r rounded-xl from-slate-500 to-slate-600"
                 onClick={() => { setMode("30"); setQ(""); setLabelFilter([]); }}
                 title="Limpiar y volver a Últimos 30 días"
               >
                 Limpiar filtros
               </button>
               <button
-                className="px-4 py-2 text-white bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl shadow"
+                className="px-4 py-2 text-white shadow bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl"
                 onClick={exportConvs}
               >
                 Exportar Conversaciones
@@ -639,24 +637,24 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
         </div>
 
         {/* Serie por día */}
-        <section className="p-6 rounded-2xl border shadow bg-white/90">
-          <div className="flex justify-between items-center mb-4">
+        <section className="p-6 border shadow rounded-2xl bg-white/90">
+          <div className="flex items-center justify-between mb-4">
             <h3 className="text-xl font-bold text-slate-800">📈 Conversaciones por día</h3>
             <button
-              className="px-4 py-2 text-white bg-gradient-to-r from-blue-500 to-blue-600 rounded-xl shadow"
+              className="px-4 py-2 text-white shadow bg-gradient-to-r from-blue-500 to-blue-600 rounded-xl"
               onClick={exportPorDia}
             >
               Exportar CSV
             </button>
           </div>
           {kpis.porDia.length === 0 ? (
-            <div className="p-6 text-center rounded-xl border text-slate-500 bg-slate-50 border-slate-200">
+            <div className="p-6 text-center border rounded-xl text-slate-500 bg-slate-50 border-slate-200">
               Sin datos en el período.
             </div>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 max-h-[360px] overflow-y-auto pr-1">
               {kpis.porDia.map((d, i) => (
-                <div key={i} className="p-4 bg-white rounded-xl border hover:bg-slate-50">
+                <div key={i} className="p-4 bg-white border rounded-xl hover:bg-slate-50">
                   <div className="text-3xl font-extrabold text-blue-600">{d.v}</div>
                   <div className="mt-1 text-sm text-slate-700">{d.k}</div>
                 </div>
@@ -666,13 +664,13 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
         </section>
 
         {/* Últimas ventas */}
-        <section className="p-6 rounded-2xl border shadow bg-white/90">
-          <div className="flex justify-between items-center mb-4">
+        <section className="p-6 border shadow rounded-2xl bg-white/90">
+          <div className="flex items-center justify-between mb-4">
             <h3 className="text-xl font-bold text-slate-800">🛒 Últimas ventas</h3>
             <div className="text-sm text-slate-600">{ventasConvs.length} ventas en el período</div>
           </div>
           {ventasConvs.length === 0 ? (
-            <div className="p-6 text-center rounded-2xl border text-slate-500 bg-slate-50 border-slate-200">
+            <div className="p-6 text-center border rounded-2xl text-slate-500 bg-slate-50 border-slate-200">
               Sin ventas en el período.
             </div>
           ) : (
@@ -685,7 +683,7 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
                 ))
                 .slice(0, 20)
                 .map((c) => (
-                  <li key={c.id} className="flex justify-between items-center p-3 bg-white rounded-xl border hover:bg-slate-50">
+                  <li key={c.id} className="flex items-center justify-between p-3 bg-white border rounded-xl hover:bg-slate-50">
                     <div>
                       <div className="font-medium">{c.contact?.name || "—"}</div>
                       <div className="text-xs text-slate-500">{c.id}</div>
@@ -709,11 +707,11 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
         </section>
 
         {/* Top etiquetas */}
-        <section className="p-6 rounded-2xl border shadow bg-white/90">
-          <div className="flex justify-between items-center mb-4">
+        <section className="p-6 border shadow rounded-2xl bg-white/90">
+          <div className="flex items-center justify-between mb-4">
             <h3 className="text-xl font-bold text-slate-800">🏷️ Etiquetas</h3>
             <button
-              className="px-4 py-2 text-white bg-gradient-to-r from-green-500 to-green-600 rounded-xl shadow"
+              className="px-4 py-2 text-white shadow bg-gradient-to-r from-green-500 to-green-600 rounded-xl"
               onClick={exportEtiquetas}
             >
               Exportar CSV
@@ -726,13 +724,13 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
             }, {});
             const entries = Object.entries(counts);
             return entries.length === 0 ? (
-              <div className="p-6 text-center rounded-2xl border text-slate-500 bg-slate-50 border-slate-200">
+              <div className="p-6 text-center border rounded-2xl text-slate-500 bg-slate-50 border-slate-200">
                 Sin etiquetas en el período.
               </div>
             ) : (
               <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 max-h-[360px] overflow-y-auto pr-1">
                 {entries.sort((a,b)=>b[1]-a[1]).map(([k,v]) => (
-                  <div key={k} className="p-4 bg-white rounded-xl border hover:bg-slate-50">
+                  <div key={k} className="p-4 bg-white border rounded-xl hover:bg-slate-50">
                     <div className="text-3xl font-extrabold text-green-600">{v}</div>
                     <div className="mt-1 text-sm break-words text-slate-700">{k}</div>
                   </div>
@@ -743,8 +741,8 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
         </section>
 
         {/* Tabla de conversaciones + PAGINADO */}
-        <section className="p-6 rounded-2xl border shadow bg-white/90">
-          <div className="flex justify-between items-center mb-4">
+        <section className="p-6 border shadow rounded-2xl bg-white/90">
+          <div className="flex items-center justify-between mb-4">
             <h3 className="text-xl font-bold text-slate-800">📚 Conversaciones</h3>
             <div className="text-sm text-slate-600">
               {`Mostrando ${convsPage.length} de ${totalItems} (pág. ${pageClamped}/${totalPages})`}
@@ -754,12 +752,12 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
           {loading ? (
             <div className="py-10 text-center text-slate-600">Cargando…</div>
           ) : convsPage.length === 0 ? (
-            <div className="p-6 text-center rounded-2xl border text-slate-500 bg-slate-50 border-slate-200">
+            <div className="p-6 text-center border rounded-2xl text-slate-500 bg-slate-50 border-slate-200">
               Sin resultados para los filtros.
             </div>
           ) : (
             <>
-              <div className="overflow-auto rounded-2xl border">
+              <div className="overflow-auto border rounded-2xl">
                 <table className="table">
                   <thead>
                     <tr>
@@ -794,9 +792,9 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
               </div>
 
               {/* Controles de paginado */}
-              <div className="flex justify-between items-center mt-4">
+              <div className="flex items-center justify-between mt-4">
                 <button
-                  className="px-3 py-2 bg-white rounded-lg border hover:bg-slate-50 disabled:opacity-50"
+                  className="px-3 py-2 bg-white border rounded-lg hover:bg-slate-50 disabled:opacity-50"
                   disabled={pageClamped <= 1}
                   onClick={() => setPage(p => Math.max(1, p - 1))}
                 >
@@ -806,7 +804,7 @@ export default function VendorDetailPanel({ vendorUid, onBack }) {
                   Página {pageClamped} de {totalPages}
                 </div>
                 <button
-                  className="px-3 py-2 bg-white rounded-lg border hover:bg-slate-50 disabled:opacity-50"
+                  className="px-3 py-2 bg-white border rounded-lg hover:bg-slate-50 disabled:opacity-50"
                   disabled={pageClamped >= totalPages}
                   onClick={() => setPage(p => Math.min(totalPages, p + 1))}
                 >

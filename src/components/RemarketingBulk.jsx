@@ -3,6 +3,7 @@ import { db } from "../firebase";
 import { collection, query, where, orderBy, limit, getDocs } from "firebase/firestore";
 import { listLabels } from "../lib/labels";
 import { getAuth } from "firebase/auth";
+import { useNavigate } from "react-router-dom";
 
 // ---------- Config ----------
 const LOCKED_LANG = "es_AR";
@@ -86,14 +87,16 @@ async function sendTemplate({ phone, components = [] }) {
   });
   const text = await resp.text();
   let data = {};
-  try { data = text ? JSON.parse(text) : {}; } catch {}
+  try { data = text ? JSON.parse(text) : {}; } catch (e){console.error(e);}
   if (!resp.ok) throw new Error(data?.error?.message || data?.error || text || `HTTP ${resp.status}`);
   return data;
 }
 
-export default function RemarketingBulk() {
+export default function RemarketingBulk({ onClose }) {
   const [templatesRaw, setTemplatesRaw] = useState([]);
   const [senderInfo, setSenderInfo] = useState(null);
+  // eslint-disable-next-line no-unused-vars
+  const navigate = useNavigate();
 
   useEffect(() => {
     let cancelled = false;
@@ -119,7 +122,7 @@ export default function RemarketingBulk() {
         const r = await authFetch("/api/sender");
         const data = await r.json();
         if (!cancelled && r.ok) setSenderInfo(data);
-      } catch {}
+      } catch (e){console.error(e)}
     })();
     return () => { cancelled = true; };
   }, []);
@@ -190,7 +193,7 @@ export default function RemarketingBulk() {
       alert(`Copiado: ${tagMetaOpt.length} números (solo opt-in)`);
     } catch (e) { console.error("copy failed", e); }
   }
-
+// eslint-disable-next-line no-unused-vars
   const [rawPhones, setRawPhones] = useState("");
   const numbers = useMemo(() => {
     const rows = rawPhones.split(/\n|,|;|\s+/).map((x) => x.trim()).filter(Boolean);
@@ -223,6 +226,7 @@ export default function RemarketingBulk() {
 
   // ---------- Envío ----------
   const [sending, setSending] = useState(false);
+  // eslint-disable-next-line no-unused-vars
   const [progress, setProgress] = useState({ sent: 0, ok: 0, fail: 0 });
   const [rowsState, setRowsState] = useState([]);
   const [delayMs, setDelayMs] = useState(800);
@@ -411,7 +415,7 @@ export default function RemarketingBulk() {
         setRowsState((prev) => prev.map((r) => (r.phone === phone ? { ...r, status: "fail", error: String(err?.message || err) } : r)));
         setProgress((p) => ({ sent: p.sent + 1, ok: p.ok, fail: p.fail + 1 }));
       }
-      // eslint-disable-next-line no-await-guard
+      
       await sleep(delayMs || 800);
     }
 
@@ -419,7 +423,17 @@ export default function RemarketingBulk() {
   };
 
   return (
-    <div className="p-4 mx-auto max-w-5xl">
+    <div className="max-w-5xl p-4 mx-auto">
+    <div className="flex items-center gap-3 mb-3">
+  <button
+  type="button"
+  className="btn btn-sm btn-ghost"
+  onClick={onClose}
+>
+  ← Volver
+</button>
+  <h2 className="text-2xl font-bold">📣 Remarketing por Plantilla (WhatsApp)</h2>
+</div>
       <h2 className="mb-2 text-2xl font-bold">📣 Remarketing por Plantilla (WhatsApp)</h2>
       <p className="mb-1 text-sm text-gray-600">
         Este módulo usa <b>solo</b> la plantilla aprobada <code>{LOCKED_TEMPLATE}</code> ({LOCKED_LANG}) y envía únicamente a contactos con <b>opt-in</b>.
@@ -431,23 +445,23 @@ export default function RemarketingBulk() {
       )}
 
       {/* Plantilla */}
-      <div className="p-3 mb-4 space-y-2 rounded-lg border">
+      <div className="p-3 mb-4 space-y-2 border rounded-lg">
         <label className="block text-sm font-semibold">Plantilla</label>
         <div className="grid gap-2 md:grid-cols-2">
           <div>
             <span className="block text-xs text-gray-600">Idioma</span>
-            <div className="p-2 w-full bg-gray-50 rounded border">{LOCKED_LANG}</div>
+            <div className="w-full p-2 border rounded bg-gray-50">{LOCKED_LANG}</div>
           </div>
           <div>
             <span className="block text-xs text-gray-600">Plantilla aprobada (MARKETING)</span>
-            <div className="p-2 w-full bg-gray-50 rounded border">
+            <div className="w-full p-2 border rounded bg-gray-50">
               {tpl ? `${LOCKED_TEMPLATE} · ${LOCKED_LANG}` : "(no disponible / no aprobada)"}
             </div>
           </div>
         </div>
 
         {tplBody && tpl && (
-          <div className="p-2 text-sm bg-gray-50 rounded border">
+          <div className="p-2 text-sm border rounded bg-gray-50">
             <div className="font-mono whitespace-pre-wrap">{tplBody}</div>
             <div className="mt-1 text-gray-500">
               Variables detectadas en BODY: {varCount} &nbsp;
@@ -460,7 +474,7 @@ export default function RemarketingBulk() {
         )}
 
         {!tpl && (
-          <div className="p-2 text-sm text-red-700 bg-red-50 rounded border border-red-300">
+          <div className="p-2 text-sm text-red-700 border border-red-300 rounded bg-red-50">
             La plantilla <b>{LOCKED_TEMPLATE}</b> ({LOCKED_LANG}) no aparece como <b>APPROVED / MARKETING</b>.
             Aprobala en tu WABA y recargá esta página.
           </div>
@@ -468,15 +482,15 @@ export default function RemarketingBulk() {
       </div>
 
       {/* Variables */}
-      <div className="p-3 mb-4 space-y-2 rounded-lg border">
-        <div className="flex flex-wrap gap-3 items-center">
+      <div className="p-3 mb-4 space-y-2 border rounded-lg">
+        <div className="flex flex-wrap items-center gap-3">
           <span className="text-sm font-semibold">Variables</span>
-          <label className="flex gap-2 items-center text-sm">
+          <label className="flex items-center gap-2 text-sm">
             <input type="radio" name="mode" value="global" checked={mode === "global"} onChange={() => setMode("global")} />
             Mismas para todos
           </label>
           {destMode === "manual" && (
-            <label className="flex gap-2 items-center text-sm">
+            <label className="flex items-center gap-2 text-sm">
               <input type="radio" name="mode" value="csv" checked={mode === "csv"} onChange={() => setMode("csv")} />
               Por fila (CSV)
             </label>
@@ -489,7 +503,7 @@ export default function RemarketingBulk() {
                 <textarea
                   key={idx}
                   rows={6}
-                  className="p-2 font-mono whitespace-pre-wrap rounded border md:col-span-3"
+                  className="p-2 font-mono whitespace-pre-wrap border rounded md:col-span-3"
                   placeholder="Pegá 1 combo por línea. Ej:&#10;Impermeabilizante 20L + Rodillo + Venda $49.900&#10;Látex 20L + 2 Enduidos $39.900"
                   value={vars[idx] || ""}
                   onChange={(e) => { const v = [...vars]; v[idx] = e.target.value; setVars(v); }}
@@ -497,7 +511,7 @@ export default function RemarketingBulk() {
               ) : (
                 <input
                   key={idx}
-                  className="p-2 rounded border"
+                  className="p-2 border rounded"
                   placeholder={`{{${idx + 1}}} ${idx === 0 ? '(opcional: nombre o saludo)' : ''}`}
                   value={vars[idx] || ""}
                   onChange={(e) => { const v = [...vars]; v[idx] = e.target.value; setVars(v); }}
@@ -507,13 +521,13 @@ export default function RemarketingBulk() {
           </div>
         ) : (
           <div className="space-y-2">
-            <div className="flex gap-2 items-center">
+            <div className="flex items-center gap-2">
               <input type="file" accept=".csv" ref={fileInputRef} onChange={(e) => onCsvUpload(e.target.files?.[0])} />
-              <button type="button" className="px-3 py-1 rounded border" onClick={() => fileInputRef.current?.click()}>Cargar CSV</button>
+              <button type="button" className="px-3 py-1 border rounded" onClick={() => fileInputRef.current?.click()}>Cargar CSV</button>
             </div>
             <p className="text-xs text-gray-600">Formato: <code>phone,var1,var2,...</code> — <b>v1 puede ir vacío</b> (usa “buen día / buenas tardes / buenas noches” automáticamente).</p>
             {csvPreview.length > 0 && (
-              <div className="overflow-auto max-h-40 text-sm rounded border">
+              <div className="overflow-auto text-sm border rounded max-h-40">
                 <table className="w-full">
                   <thead className="bg-gray-50">
                     <tr>
@@ -537,10 +551,10 @@ export default function RemarketingBulk() {
       </div>
 
       {/* Destinatarios */}
-      <div className="p-3 mb-4 space-y-2 rounded-lg border">
-        <div className="flex flex-wrap gap-3 items-center">
+      <div className="p-3 mb-4 space-y-2 border rounded-lg">
+        <div className="flex flex-wrap items-center gap-3">
           <span className="text-sm font-semibold">Destinatarios</span>
-          <label className="flex gap-2 items-center text-sm">
+          <label className="flex items-center gap-2 text-sm">
             <input type="radio" name="dest" value="tags" checked={destMode === "tags"} onChange={() => setDestMode("tags")} />
             Por etiquetas
           </label>
@@ -562,7 +576,7 @@ export default function RemarketingBulk() {
               {" "}({tagPhonesAll.length} total)
             </div>
 
-            <label className="flex gap-2 items-center text-sm">
+            <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
                 checked={includeNoOptIn}
@@ -577,10 +591,10 @@ export default function RemarketingBulk() {
               <>
                 <PreviewTable rows={includeNoOptIn ? tagMetaAll : tagMetaOpt} />
 
-                <div className="flex flex-wrap gap-2 items-center mt-2">
+                <div className="flex flex-wrap items-center gap-2 mt-2">
                   <button
                     type="button"
-                    className="px-3 py-1 text-sm rounded border"
+                    className="px-3 py-1 text-sm border rounded"
                     onClick={() => setShowNumbers((v) => !v)}
                   >
                     {showNumbers ? "Ocultar números" : `Ver números (${(includeNoOptIn ? tagMetaAll.length : tagMetaOpt.length)})`}
@@ -588,7 +602,7 @@ export default function RemarketingBulk() {
 
                   <button
                     type="button"
-                    className="px-3 py-1 text-sm rounded border"
+                    className="px-3 py-1 text-sm border rounded"
                     onClick={copyNumbersAnnotated}
                     title="Copia teléfono + estado (lo mismo que ves)"
                   >
@@ -597,7 +611,7 @@ export default function RemarketingBulk() {
 
                   <button
                     type="button"
-                    className="px-3 py-1 text-sm rounded border"
+                    className="px-3 py-1 text-sm border rounded"
                     onClick={copyOnlyOptIn}
                     title="Copia solo los teléfonos que tienen opt-in=true"
                   >
@@ -622,19 +636,19 @@ export default function RemarketingBulk() {
       </div>
 
       {/* Cumplimiento */}
-      <div className="p-3 mb-4 space-y-1 text-sm rounded-lg border">
-        <label className="flex gap-2 items-center">
+      <div className="p-3 mb-4 space-y-1 text-sm border rounded-lg">
+        <label className="flex items-center gap-2">
           <input type="checkbox" checked={confirmOptIn} onChange={(e) => setConfirmOptIn(e.target.checked)} />
           Confirmo que todos los contactos tienen <b>opt-in</b> para recibir mensajes de WhatsApp de este negocio.
         </label>
-        <label className="flex gap-2 items-center">
+        <label className="flex items-center gap-2">
           <input type="checkbox" checked={confirmTemplate} onChange={(e) => setConfirmTemplate(e.target.checked)} />
           Confirmo que usaré <b>la plantilla aprobada</b> por Meta para este envío.
         </label>
       </div>
 
       {/* Acciones */}
-      <div className="flex flex-wrap gap-2 items-center mb-4">
+      <div className="flex flex-wrap items-center gap-2 mb-4">
         <button
           type="button"
           className={`px-4 py-2 rounded text-white ${canSend ? "bg-black" : "bg-gray-400 cursor-not-allowed"}`}
@@ -646,13 +660,13 @@ export default function RemarketingBulk() {
         {!tpl && (
           <span className="text-sm text-red-700">No se puede enviar: la plantilla bloqueada aún no está aprobada/visible.</span>
         )}
-        <label className="flex gap-2 items-center ml-auto text-sm">
+        <label className="flex items-center gap-2 ml-auto text-sm">
           <span>Delay (ms)</span>
           <input
             type="number"
             min={100}
             step={100}
-            className="p-1 w-24 rounded border"
+            className="w-24 p-1 border rounded"
             value={delayMs}
             onChange={(e) => setDelayMs(parseInt(e.target.value || "800", 10))}
           />
@@ -661,7 +675,7 @@ export default function RemarketingBulk() {
 
       {/* Resultado por número */}
       {rowsState.length > 0 && (
-        <div className="overflow-auto max-h-80 rounded-lg border">
+        <div className="overflow-auto border rounded-lg max-h-80">
           <table className="w-full text-sm">
             <thead className="bg-gray-50">
               <tr>
@@ -699,7 +713,7 @@ function LabelsBlock({ labelsLoading, labelsError, allLabels, selectedLabels, se
       {allLabels.map((l) => {
         const on = selectedLabels.includes(l.slug);
         return (
-          <label key={l.slug} className="flex gap-2 items-center text-sm">
+          <label key={l.slug} className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
               checked={on}
@@ -714,7 +728,7 @@ function LabelsBlock({ labelsLoading, labelsError, allLabels, selectedLabels, se
 }
 function PreviewTable({ rows }) {
   return (
-    <div className="overflow-auto max-h-40 rounded border">
+    <div className="overflow-auto border rounded max-h-40">
       <table className="w-full text-sm">
         <thead className="bg-gray-50">
           <tr>

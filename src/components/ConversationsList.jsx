@@ -20,7 +20,7 @@ import {
   setDoc,
 } from "firebase/firestore";
 import { useAuthState } from "../hooks/useAuthState.js";
-import LabelChips from "./LabelChips";
+import LabelChips from "./LabelChips.jsx";
 
 /** Fecha corta para la columna izquierda */
 function formatShort(ts) {
@@ -52,8 +52,8 @@ function RowSkeleton() {
   return (
     <div className="border-t px-3 py-3 border-[#E3EFE7] bg-white animate-pulse">
       <div className="w-40 h-3 bg-gray-200 rounded" />
-      <div className="mt-2 w-56 h-2 bg-gray-200 rounded" />
-      <div className="mt-2 w-24 h-2 bg-gray-200 rounded" />
+      <div className="w-56 h-2 mt-2 bg-gray-200 rounded" />
+      <div className="w-24 h-2 mt-2 bg-gray-200 rounded" />
     </div>
   );
 }
@@ -108,6 +108,7 @@ export default function ConversationsList({ activeId, onSelect }) {
   // =========================
   const SEEN_KEY = "convSeenInbound_v1";
   const seenInboundRef = useRef({});
+  // eslint-disable-next-line no-unused-vars
   const [seenTick, setSeenTick] = useState(0);
   useEffect(() => {
     try {
@@ -118,7 +119,7 @@ export default function ConversationsList({ activeId, onSelect }) {
     }
   }, []);
   const saveSeen = () => {
-    try { localStorage.setItem(SEEN_KEY, JSON.stringify(seenInboundRef.current)); } catch {}
+    try { localStorage.setItem(SEEN_KEY, JSON.stringify(seenInboundRef.current)); } catch (e){console.error(e)}
   };
   const loadSeenFor = async (ids) => {
     try {
@@ -674,7 +675,7 @@ useEffect(() => {
       </div>
 
       {/* Contenido scrollable */}
-      <div className="overflow-y-auto flex-1">
+      <div className="flex-1 overflow-y-auto">
         {tab !== "etiquetas" ? (
           <>
             {loading && (
@@ -715,9 +716,9 @@ useEffect(() => {
                         : c.id
                     }
                   >
-                    <div className="flex gap-3 justify-between items-center">
+                    <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="flex gap-2 items-center font-mono text-sm truncate">
+                        <div className="flex items-center gap-2 font-mono text-sm truncate">
                           {c.contact?.name || c.id}
                           {showNew && <span className="ping-badge" title="Nuevo mensaje entrante" />}
                         </div>
@@ -734,7 +735,7 @@ useEffect(() => {
                         </div>
                       </div>
 
-                      <div className="flex gap-2 items-center shrink-0">
+                      <div className="flex items-center gap-2 shrink-0">
                         {assignedToMe ? (
                           <button
                             onClick={(e) => {
@@ -865,7 +866,7 @@ useEffect(() => {
           </>
         ) : (
           // ===== Vista por etiqueta (TODAS, SIN paginar) =====
-          <div className="overflow-x-hidden w-full md:flex md:min-h-0">
+          <div className="w-full overflow-x-hidden md:flex md:min-h-0">
             {/* Sidebar desktop */}
             <aside className="hidden md:block w-64 overflow-y-auto border-r shrink-0 border-[#CDEBD6]">
   <div className="p-2 border-b border-[#CDEBD6] bg-[#EAF7EE]">
@@ -900,7 +901,7 @@ useEffect(() => {
           ].join(" ")}
           title={isNone ? "Sin etiqueta" : display}
         >
-          <div className="flex gap-2 justify-between items-center">
+          <div className="flex items-center justify-between gap-2">
             <div className="truncate">
               {isNone ? (
                 <span className="badge badge-neutral">Sin etiqueta</span>
@@ -940,7 +941,7 @@ useEffect(() => {
             </div>
 
             {/* Contenido derecha */}
-            <section className="overflow-y-auto w-full min-w-0 md:flex-1">
+            <section className="w-full min-w-0 overflow-y-auto md:flex-1">
               {labelsLoading ? (
                 <div className="p-3 space-y-2">
                   <RowSkeleton />
@@ -994,9 +995,9 @@ useEffect(() => {
                                     : c.id
                                 }
                               >
-                                <div className="flex gap-2 justify-between items-center">
+                                <div className="flex items-center justify-between gap-2">
                                   <div className="min-w-0">
-                                    <div className="flex gap-2 items-center font-mono text-sm truncate">
+                                    <div className="flex items-center gap-2 font-mono text-sm truncate">
                                       {c.contact?.name || c.id}
                                       {showNew && <span className="ping-badge" title="Nuevo mensaje entrante" />}
                                     </div>
@@ -1007,7 +1008,7 @@ useEffect(() => {
                                       <LabelChips slugs={slugs} />
                                     </div>
                                   </div>
-                                  <div className="flex gap-2 items-center shrink-0">
+                                  <div className="flex items-center gap-2 shrink-0">
                                     {assignedToMe ? (
                                       <button
                                         onClick={(e) => { e.stopPropagation(); unassign(c); }}
@@ -1133,9 +1134,9 @@ useEffect(() => {
                             : c.id
                         }
                       >
-                        <div className="flex gap-2 justify-between items-center">
+                        <div className="flex items-center justify-between gap-2">
                           <div className="min-w-0">
-                            <div className="flex gap-2 items-center font-mono text-sm truncate">
+                            <div className="flex items-center gap-2 font-mono text-sm truncate">
                               {c.contact?.name || c.id}
                               {showNew && <span className="ping-badge" title="Nuevo mensaje entrante" />}
                             </div>
@@ -1146,7 +1147,7 @@ useEffect(() => {
                               <LabelChips slugs={slugs} />
                             </div>
                           </div>
-                          <div className="flex gap-2 items-center shrink-0">
+                          <div className="flex items-center gap-2 shrink-0">
                             {assignedToMe ? (
                               <button
                                 onClick={(e) => { e.stopPropagation(); unassign(c); }}

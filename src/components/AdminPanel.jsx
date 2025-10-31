@@ -9,7 +9,7 @@ import {
   getDoc,
   onSnapshot,
   Timestamp,
-  serverTimestamp 
+  serverTimestamp
 } from "firebase/firestore";
 
 import AdminVendors from "./AdminVendors.jsx";
@@ -36,7 +36,7 @@ function parseLocalYMD(s) {
     return new Date(s);
   }
 }
-// NUEVO: Zona horaria fija de negocio
+// Zona horaria fija de negocio
 const BUSINESS_TZ = "America/Argentina/Cordoba";
 function ymdTZ(d) {
   try {
@@ -54,8 +54,7 @@ function startOfDayTZ(d) {
   try {
     const s = ymdTZ(d);
     const [y, m, dd] = s.split("-").map(Number);
-    // GMT-3 → medianoche local equivale a 03:00 UTC
-    return new Date(Date.UTC(y, (m || 1) - 1, dd || 1, 3, 0, 0, 0));
+    return new Date(Date.UTC(y, (m || 1) - 1, dd || 1, 3, 0, 0, 0)); // GMT-3
   } catch {
     return startOfDay(d);
   }
@@ -99,7 +98,7 @@ function downloadCSV(filename, csv) {
 function MiniStatCard({ title, value, from = "#eef2ff", to = "#e0e7ff", text = "#1e293b" }) {
   return (
     <div
-      className="p-4 rounded-2xl border shadow-lg"
+      className="p-4 border shadow-lg rounded-2xl"
       style={{
         background: `linear-gradient(135deg, ${from}, ${to})`,
         borderColor: "rgba(148,163,184,.35)"
@@ -115,14 +114,14 @@ function MiniStatCard({ title, value, from = "#eef2ff", to = "#e0e7ff", text = "
 
 function ListStatCard({ title, data, accent = "#3b82f6", exportBtn, formatter = (k) => k }) {
   return (
-    <section className="p-6 rounded-2xl border shadow-lg backdrop-blur-sm bg-white/90 border-white/20">
-      <div className="flex justify-between items-center mb-4">
+    <section className="p-6 border shadow-lg rounded-2xl bg-white/90 backdrop-blur-sm">
+      <div className="flex items-center justify-between mb-4">
         <h3 className="text-xl font-bold text-slate-800">{title}</h3>
         {exportBtn}
       </div>
 
       {data.length === 0 ? (
-        <div className="p-6 text-center rounded-xl border text-slate-500 bg-slate-50 border-slate-200">
+        <div className="p-6 text-center border rounded-xl bg-slate-50 text-slate-500">
           Sin datos en el período.
         </div>
       ) : (
@@ -130,7 +129,7 @@ function ListStatCard({ title, data, accent = "#3b82f6", exportBtn, formatter = 
           {data.map((d, i) => (
             <div
               key={i}
-              className="p-4 rounded-xl border shadow-sm transition bg-white/80 hover:bg-white group"
+              className="p-4 transition border shadow-sm rounded-xl bg-white/80 hover:bg-white group"
               style={{ borderColor: "rgba(226,232,240,.8)" }}
               title={`${formatter(d.k)}: ${d.v}`}
             >
@@ -144,7 +143,7 @@ function ListStatCard({ title, data, accent = "#3b82f6", exportBtn, formatter = 
   );
 }
 
-/* ======== Presencia helper (estricto: flag + lastSeen fresco) ======== */
+/* ======== Presencia helper ======== */
 function calcOnline(userDoc) {
   if (!userDoc) return false;
   const flag =
@@ -169,7 +168,7 @@ function cleanAgentLabel(s) {
 }
 
 /* =============================================================== */
-/* NUEVO: Formulario para asignar tareas a agentes (Admin → Agenda) */
+/* Form para asignar tareas a agentes (Admin → Agenda) */
 function AdminAssignTask({ vendors }) {
   const [vendorOptions, setVendorOptions] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -182,7 +181,6 @@ function AdminAssignTask({ vendors }) {
   });
 
   useEffect(() => {
-    // Mapear vendors (wabaNumbers) a opciones de selección: uid + label visible
     const arr = [];
     for (const v of vendors || []) {
       const uid = v.ownerUid || v.userUid || v.uid || v.id;
@@ -196,7 +194,7 @@ function AdminAssignTask({ vendors }) {
   function toLocalTimestamp(ymd, hm) {
     if (!ymd) return Timestamp.fromDate(new Date());
     const [y, m, d] = ymd.split("-").map(Number);
-    let H = 9, M = 0; // por defecto 09:00
+    let H = 9, M = 0;
     if (hm && /^\d{2}:\d{2}$/.test(hm)) {
       [H, M] = hm.split(":").map(Number);
     }
@@ -204,49 +202,42 @@ function AdminAssignTask({ vendors }) {
     return Timestamp.fromDate(js);
   }
 
- // AdminPanel.jsx → dentro de AdminAssignTask
-async function handleCreate(e) {
-  e?.preventDefault?.();
+  async function handleCreate(e) {
+    e?.preventDefault?.();
 
-  if (!form.userId) {
-    alert("Elegí un agente.");
-    return;
-  }
-  if (!form.titulo.trim()) {
-    alert("Escribí un título.");
-    return;
-  }
+    if (!form.userId) { alert("Elegí un agente."); return; }
+    if (!form.titulo.trim()) { alert("Escribí un título."); return; }
 
-  setSaving(true);
-  try {
-    await addDoc(collection(db, "tareas"), {
-      userId: form.userId,                           // UID del agente
-      titulo: form.titulo.trim(),
-      nota: form.nota?.trim() || "",
-      fecha: toLocalTimestamp(form.fecha, form.hora),// Timestamp local (día+hora)
-      fechaStr: form.fecha || null,                  // ← string yyyy-MM-dd para agenda
-      done: false,
-      createdBy: auth?.currentUser?.uid || null,
-      createdAt: serverTimestamp(),                  // ← timestamps de servidor
-      updatedAt: serverTimestamp(),
-    });
+    setSaving(true);
+    try {
+      await addDoc(collection(db, "tareas"), {
+        userId: form.userId,
+        titulo: form.titulo.trim(),
+        nota: form.nota?.trim() || "",
+        fecha: toLocalTimestamp(form.fecha, form.hora),
+        fechaStr: form.fecha || null,
+        done: false,
+        createdBy: auth?.currentUser?.uid || null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
 
-    setForm({ userId: "", titulo: "", nota: "", fecha: "", hora: "" });
-    alert("Tarea creada y asignada 🙌");
-  } catch (err) {
-    console.error("create task failed:", err?.code, err?.message, err);
-    alert("No se pudo crear la tarea.");
-  } finally {
-    setSaving(false);
+      setForm({ userId: "", titulo: "", nota: "", fecha: "", hora: "" });
+      alert("Tarea creada y asignada 🙌");
+    } catch (err) {
+      console.error("create task failed:", err?.code, err?.message, err);
+      alert("No se pudo crear la tarea.");
+    } finally {
+      setSaving(false);
+    }
   }
-}
 
   return (
-    <section className="p-6 mb-6 rounded-2xl border shadow bg-white/95">
+    <section className="p-6 mb-6 border shadow rounded-2xl bg-white/95">
       <h3 className="mb-3 text-lg font-bold text-slate-800">🗓️ Asignar tarea a un agente</h3>
       <form onSubmit={handleCreate} className="grid gap-3 md:grid-cols-12">
         <select
-          className="p-2 rounded border md:col-span-3"
+          className="p-2 border rounded md:col-span-3"
           value={form.userId}
           onChange={(e)=>setForm(f=>({...f, userId:e.target.value}))}
           required
@@ -258,7 +249,7 @@ async function handleCreate(e) {
         </select>
 
         <input
-          className="p-2 rounded border md:col-span-3"
+          className="p-2 border rounded md:col-span-3"
           placeholder="Título de la tarea"
           value={form.titulo}
           onChange={(e)=>setForm(f=>({...f, titulo:e.target.value}))}
@@ -267,20 +258,20 @@ async function handleCreate(e) {
 
         <input
           type="date"
-          className="p-2 rounded border md:col-span-2"
+          className="p-2 border rounded md:col-span-2"
           value={form.fecha}
           onChange={(e)=>setForm(f=>({...f, fecha:e.target.value}))}
           required
         />
         <input
           type="time"
-          className="p-2 rounded border md:col-span-2"
+          className="p-2 border rounded md:col-span-2"
           value={form.hora}
           onChange={(e)=>setForm(f=>({...f, hora:e.target.value}))}
         />
 
         <input
-          className="p-2 rounded border md:col-span-12"
+          className="p-2 border rounded md:col-span-12"
           placeholder="Nota (opcional)"
           value={form.nota}
           onChange={(e)=>setForm(f=>({...f, nota:e.target.value}))}
@@ -296,13 +287,12 @@ async function handleCreate(e) {
         </div>
       </form>
       <p className="mt-2 text-xs text-slate-500">
-        Tip: La tarea aparecerá automáticamente en la <b>Agenda</b> del agente (porque la Agenda filtra <code>tareas</code> por <code>userId</code> y <code>fecha</code>).
+        Tip: La tarea aparecerá automáticamente en la <b>Agenda</b> del agente (la Agenda filtra <code>tareas</code> por <code>userId</code> y <code>fecha</code>).
       </p>
     </section>
   );
 }
 
-/* =============================================================== */
 /* ============================ MAIN ============================= */
 export default function AdminPanel() {
   // Pestañas
@@ -318,7 +308,7 @@ export default function AdminPanel() {
   const [usersByUid, setUsersByUid] = useState({});
 
   // Filtros globales (sin agente)
-  const [mode, setMode] = useState("7"); // ← soporta "today"
+  const [mode, setMode] = useState("7"); // soporta "today"
   const [from, setFrom] = useState(ymdTZ(new Date(Date.now() - 6 * 86400000)));
   const [to, setTo] = useState(ymdTZ(new Date()));
   const [zoneFilter, setZoneFilter] = useState("(todas)");
@@ -339,9 +329,9 @@ export default function AdminPanel() {
     return ["(todas)", ...Array.from(set).sort()];
   }, [vendors]);
 
-  // Carga datasets del dashboard + escucha users para presencia
+  // Carga datasets del dashboard + users presencia
   useEffect(() => {
-    if (tab !== "dashboard" && tab !== "tasks") return; // vendors y users nos sirven en ambas
+    if (tab !== "dashboard" && tab !== "tasks") return;
     setLoading(true);
 
     let unsubUsers = null;
@@ -355,7 +345,7 @@ export default function AdminPanel() {
             try {
               const c = await getDoc(doc(db, "contacts", d.id));
               contact = c.exists() ? c.data() : null;
-            } catch {}
+            } catch (e){console.error(e)}
             return { id: d.id, ...d.data(), contact };
           })
         );
@@ -376,7 +366,7 @@ export default function AdminPanel() {
       }
     })();
 
-    return () => { try { unsubUsers && unsubUsers(); } catch {} };
+    return () => { try { unsubUsers && unsubUsers(); } catch (e){console.error(e)} };
   }, [tab]);
 
   // Períodos rápidos
@@ -415,7 +405,6 @@ export default function AdminPanel() {
     });
   }, [convs, range]);
 
-  // Índice zona → vendedores (para filtrar por zona)
   const vendorIndexByZone = useMemo(() => {
     const map = new Map();
     for (const v of vendors) {
@@ -432,7 +421,6 @@ export default function AdminPanel() {
     return map;
   }, [vendors]);
 
-  // Índice uid → nombre visible (alias/owner/phone)
   const vendorNameByUid = useMemo(() => {
     const map = {};
     for (const v of vendors) {
@@ -476,7 +464,6 @@ export default function AdminPanel() {
     });
   }, [convsByZone, labelFilter]);
 
-  // Vista total: sin filtro de agente
   const convsFiltered = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!s) return convsByLabel;
@@ -487,7 +474,6 @@ export default function AdminPanel() {
     });
   }, [convsByLabel, q]);
 
-  // ⚠️ Reset de página ante cambios de filtros
   useEffect(() => { setPage(1); }, [mode, from, to, zoneFilter, labelFilter, q]);
 
   // Paginado
@@ -498,7 +484,7 @@ export default function AdminPanel() {
   const sliceEnd   = sliceStart + pageSize;
   const convsPage  = convsFiltered.slice(sliceStart, sliceEnd);
 
-  // KPIs globales
+  // KPIs
   const getAgentName = (c) => {
     const uid = c.assignedToUid || "";
     const u = usersByUid[uid];
@@ -527,7 +513,6 @@ export default function AdminPanel() {
     return { total, sinAsignar, porEtiqueta, porAgente };
   }, [convsFiltered, usersByUid, vendorNameByUid]);
 
-  // Series y tops
   const seriePorDia = useMemo(() => {
     const map = new Map();
     const [a, b] = range;
@@ -544,13 +529,11 @@ export default function AdminPanel() {
     () => Object.entries(kpis.porEtiqueta).sort((a, b) => b[1] - a[1]).slice(0, 50).map(([k, v]) => ({ k, v })),
     [kpis.porEtiqueta]
   );
-
   const agentesData = useMemo(
     () => Object.entries(kpis.porAgente).sort((a, b) => b[1] - a[1]).slice(0, 50).map(([k, v]) => ({ k, v })),
     [kpis.porAgente]
   );
 
-  // 🛒 Ventas por vendedor (con etiqueta 'vendido')
   const ventasPorAgente = useMemo(() => {
     const map = new Map();
     for (const c of convsFiltered) {
@@ -565,7 +548,6 @@ export default function AdminPanel() {
       .map(([k, v]) => ({ k, v }));
   }, [convsFiltered, usersByUid, vendorNameByUid]);
 
-  // Vendedores activos / por zona
   const vendedoresActivos = useMemo(() => vendors.filter(v => !!v.active), [vendors]);
   const vendedoresPorZona = useMemo(() => {
     const map = {};
@@ -606,24 +588,25 @@ export default function AdminPanel() {
   // ────────────────────────────────────────────────────────────
   // UI
   return (
-    <div className="min-h-screen bg-gradient-to-br via-blue-50 to-indigo-100 from-slate-50">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100">
       <div className="p-6 mx-auto space-y-8 max-w-7xl">
         {/* Header */}
-        <div className="space-y-4 text-center">
-          <h1 className="text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r via-blue-900 to-indigo-900 from-slate-900">
+        <header className="space-y-2 text-center">
+          <h1 className="text-4xl font-extrabold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-slate-900 via-blue-900 to-indigo-900">
             Panel de Administración
           </h1>
-          <p className="text-lg text-slate-600">Gestiona tu CRM con herramientas avanzadas</p>
-        </div>
+          <p className="text-slate-600">Gestiona tu CRM con herramientas avanzadas</p>
+        </header>
 
-        <section className="p-6 rounded-2xl border shadow-lg backdrop-blur-sm bg-white/90 border-white/20">
+        {/* Vendedores por zona (resumen) */}
+        <section className="p-6 border shadow-lg rounded-2xl bg-white/90 backdrop-blur-sm">
           <h3 className="mb-4 text-xl font-bold text-slate-800">🌍 Vendedores activos por zona</h3>
           <div className="grid gap-4 md:grid-cols-2">
             {Object.entries(vendedoresPorZonaFiltrado).map(([zona, arr]) => (
-              <div key={zona} className="p-4 bg-gradient-to-br rounded-xl border shadow-sm from-slate-50 to-slate-100 border-slate-200/60">
-                <div className="flex justify-between items-center mb-3">
+              <div key={zona} className="p-4 border shadow-sm rounded-xl bg-gradient-to-br from-slate-50 to-slate-100 border-slate-200/60">
+                <div className="flex items-center justify-between mb-3">
                   <div className="font-semibold text-slate-800">{zona}</div>
-                  <div className="px-2 py-1 text-sm rounded-full text-slate-600 bg-slate-200">
+                  <div className="px-2 py-1 text-sm rounded-full bg-slate-200 text-slate-600">
                     {arr.length} vendedor(es)
                   </div>
                 </div>
@@ -635,7 +618,7 @@ export default function AdminPanel() {
                     return (
                       <li
                         key={v.id}
-                        className="flex flex-wrap gap-2 justify-between items-center p-2 rounded-lg border bg-white/60 border-slate-200/40"
+                        className="flex flex-wrap items-center justify-between gap-2 p-2 border rounded-lg bg-white/60 border-slate-200/40"
                       >
                         <span className="text-sm font-medium text-slate-700">
                           {v.alias || v.owner || v.phone}
@@ -643,16 +626,14 @@ export default function AdminPanel() {
                         </span>
 
                         <span
-                          className={`px-2 py-1 text-xs rounded-full ${
-                            online ? "text-green-700 bg-green-100" : "text-red-600 bg-red-100"
-                          }`}
+                          className={`px-2 py-1 text-xs rounded-full ${online ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}
                           title={u?.lastSeen ? `Visto: ${new Date(tsToMs(u.lastSeen)).toLocaleString()}` : undefined}
                         >
                           {online ? "Online" : "Offline"}
                         </span>
 
                         <button
-                          className="px-3 py-1 text-sm bg-white rounded-lg border shadow hover:bg-slate-50"
+                          className="px-3 py-1 text-sm bg-white border rounded-lg shadow hover:bg-slate-50"
                           onClick={() => {
                             setSelectedVendorUid(uid);
                             setTab("vendorDetail");
@@ -670,7 +651,7 @@ export default function AdminPanel() {
         </section>
 
         {/* Tabs */}
-        <div className="p-2 rounded-2xl border shadow-lg backdrop-blur-sm bg-white/80 border-white/20">
+        <nav className="p-2 border shadow-lg rounded-2xl bg-white/80 backdrop-blur-sm">
           <div className="flex flex-wrap gap-1">
             {[
               { key: "numbers", label: "📱 Números" },
@@ -681,20 +662,18 @@ export default function AdminPanel() {
             ].map(({ key, label }) => (
               <button
                 key={key}
-                className={`
-                  px-6 py-3 rounded-xl font-medium transition-all duration-300 transform hover:scale-105
-                  ${tab === key
-                    ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-500/25"
+                className={`px-6 py-3 rounded-xl font-medium transition-all duration-300 hover:scale-105 ${
+                  tab === key
+                    ? "text-white shadow-lg shadow-blue-500/25 bg-gradient-to-r from-blue-600 to-indigo-600"
                     : "text-slate-700 hover:bg-white/60 hover:shadow-md"
-                  }
-                `}
+                }`}
                 onClick={() => setTab(key)}
               >
                 {label}
               </button>
             ))}
           </div>
-        </div>
+        </nav>
 
         {/* Contenido por pestaña */}
         {tab === "numbers" && <AdminVendors />}
@@ -704,21 +683,21 @@ export default function AdminPanel() {
         {tab === "dashboard" && (
           <div className="space-y-8">
             {loading && (
-              <div className="flex justify-center items-center py-12">
-                <div className="w-12 h-12 rounded-full border-b-2 border-blue-600 animate-spin"></div>
+              <div className="flex items-center justify-center py-12">
+                <div className="w-12 h-12 border-b-2 border-blue-600 rounded-full animate-spin"></div>
                 <span className="ml-3 font-medium text-slate-600">Cargando datos...</span>
               </div>
             )}
 
             {!loading && (
               <>
-                {/* Controles / Filtros */}
-                <div className="p-6 rounded-2xl border shadow-lg backdrop-blur-sm bg-white/90 border-white/20">
-                  <div className="flex flex-wrap gap-4 items-end">
+                {/* Filtros */}
+                <section className="p-6 border shadow-lg rounded-2xl bg-white/90 backdrop-blur-sm">
+                  <div className="flex flex-wrap items-end gap-4">
                     <div className="space-y-2">
                       <label className="text-sm font-semibold text-slate-700">Período</label>
                       <select
-                        className="px-4 py-2 rounded-xl border transition-all border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="px-4 py-2 transition-all border rounded-xl border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                         value={mode}
                         onChange={(e) => setMode(e.target.value)}
                       >
@@ -736,7 +715,7 @@ export default function AdminPanel() {
                           <label className="text-sm font-semibold text-slate-700">Desde</label>
                           <input
                             type="date"
-                            className="px-4 py-2 rounded-xl border transition-all border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            className="px-4 py-2 transition-all border rounded-xl border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                             value={from}
                             onChange={(e) => setFrom(e.target.value)}
                           />
@@ -745,7 +724,7 @@ export default function AdminPanel() {
                           <label className="text-sm font-semibold text-slate-700">Hasta</label>
                           <input
                             type="date"
-                            className="px-4 py-2 rounded-xl border transition-all border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            className="px-4 py-2 transition-all border rounded-xl border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                             value={to}
                             onChange={(e) => setTo(e.target.value)}
                           />
@@ -756,7 +735,7 @@ export default function AdminPanel() {
                     <div className="space-y-2">
                       <label className="text-sm font-semibold text-slate-700">Zona</label>
                       <select
-                        className="px-4 py-2 rounded-xl border transition-all border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="px-4 py-2 transition-all border rounded-xl border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                         value={zoneFilter}
                         onChange={(e) => setZoneFilter(e.target.value)}
                       >
@@ -769,14 +748,14 @@ export default function AdminPanel() {
                       <input
                         type="text"
                         placeholder="Buscar nombre o número…"
-                        className="px-4 py-2 w-full rounded-xl border transition-all border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="w-full px-4 py-2 transition-all border rounded-xl border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                         value={q}
                         onChange={(e) => setQ(e.target.value)}
                       />
                     </div>
 
                     <button
-                      className="px-6 py-2 text-white bg-gradient-to-r rounded-xl shadow-lg transition-all duration-300 transform from-slate-500 to-slate-600 hover:from-slate-600 hover:to-slate-700 hover:scale-105"
+                      className="px-6 py-2 text-white transition shadow-lg rounded-xl bg-gradient-to-r from-slate-500 to-slate-600 hover:from-slate-600 hover:to-slate-700"
                       onClick={() => { setMode("today"); setZoneFilter("(todas)"); setLabelFilter([]); setQ(""); }}
                       title="Resetea filtros y muestra solo HOY"
                     >
@@ -784,7 +763,7 @@ export default function AdminPanel() {
                     </button>
 
                     <button
-                      className="px-6 py-2 text-white bg-gradient-to-r rounded-xl shadow-lg transition-all duration-300 transform from-slate-500 to-slate-600 hover:from-slate-600 hover:to-slate-700 hover:scale-105"
+                      className="px-6 py-2 text-white transition shadow-lg rounded-xl bg-gradient-to-r from-slate-500 to-slate-600 hover:from-slate-600 hover:to-slate-700"
                       onClick={() => { setZoneFilter("(todas)"); setLabelFilter([]); setQ(""); setMode("30"); }}
                     >
                       Limpiar filtros
@@ -801,7 +780,7 @@ export default function AdminPanel() {
                       <label className="text-sm font-semibold text-slate-700">Etiquetas</label>
                       <select
                         multiple
-                        className="w-full px-4 py-2 rounded-xl border border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all min-h-[100px]"
+                        className="min-h-[100px] w-full px-4 py-2 rounded-xl border border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                         value={labelFilter}
                         onChange={(e) => {
                           const vals = Array.from(e.target.selectedOptions).map(o => o.value);
@@ -821,12 +800,12 @@ export default function AdminPanel() {
 
                     <div className="space-y-2 opacity-60">
                       <label className="text-sm font-semibold text-slate-700">Agentes</label>
-                      <div className="px-4 py-3 text-sm rounded-xl border border-dashed border-slate-300 bg-slate-50 text-slate-500">
+                      <div className="px-4 py-3 text-sm border border-dashed rounded-xl bg-slate-50 text-slate-500">
                         El filtrado por vendedor/agente se hace en el detalle (VendorDetailPanel).
                       </div>
                     </div>
                   </div>
-                </div>
+                </section>
 
                 {/* KPIs principales */}
                 <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
@@ -845,7 +824,7 @@ export default function AdminPanel() {
                   formatter={(k) => k}
                   exportBtn={
                     <button
-                      className="px-4 py-2 text-white bg-gradient-to-r from-blue-500 to-blue-600 rounded-xl shadow-lg transition hover:from-blue-600 hover:to-blue-700"
+                      className="px-4 py-2 text-white shadow-lg rounded-xl bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700"
                       onClick={doExportPorDia}
                     >
                       📊 Exportar CSV
@@ -861,7 +840,7 @@ export default function AdminPanel() {
                   formatter={(k) => k}
                   exportBtn={
                     <button
-                      className="px-4 py-2 text-white bg-gradient-to-r from-green-500 to-green-600 rounded-xl shadow-lg transition hover:from-green-600 hover:to-green-700"
+                      className="px-4 py-2 text-white shadow-lg rounded-xl bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700"
                       onClick={doExportEtiquetas}
                     >
                       📊 Exportar CSV
@@ -877,7 +856,7 @@ export default function AdminPanel() {
                   formatter={(k) => String(k).replace(/\s*\([^)]*\)\s*$/, "")}
                   exportBtn={
                     <button
-                      className="px-4 py-2 text-white bg-gradient-to-r from-purple-500 to-purple-600 rounded-xl shadow-lg transition hover:from-purple-600 hover:to-purple-700"
+                      className="px-4 py-2 text-white shadow-lg rounded-xl bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700"
                       onClick={doExportAgentes}
                     >
                       📊 Exportar CSV
@@ -894,8 +873,8 @@ export default function AdminPanel() {
                 />
 
                 {/* Tabla de conversaciones */}
-                <section className="p-6 rounded-2xl border shadow bg-white/90">
-                  <div className="flex justify-between items-center mb-4">
+                <section className="p-6 border shadow rounded-2xl bg-white/90">
+                  <div className="flex items-center justify-between mb-4">
                     <h3 className="text-xl font-bold text-slate-800">📚 Conversaciones</h3>
                     <div className="text-sm text-slate-600">
                       {`Mostrando ${convsPage.length} de ${totalItems} (pág. ${pageClamped}/${totalPages})`}
@@ -903,14 +882,14 @@ export default function AdminPanel() {
                   </div>
 
                   {convsPage.length === 0 ? (
-                    <div className="p-6 text-center rounded-xl border text-slate-500 bg-slate-50 border-slate-200">
+                    <div className="p-6 text-center border rounded-xl bg-slate-50 text-slate-500">
                       Sin resultados para los filtros.
                     </div>
                   ) : (
                     <>
-                      <div className="overflow-auto rounded-xl border">
-                        <table className="table">
-                          <thead>
+                      <div className="overflow-auto border rounded-xl">
+                        <table className="table table-sm">
+                          <thead className="bg-base-200/70">
                             <tr>
                               <th className="whitespace-nowrap">ID</th>
                               <th>Contacto</th>
@@ -922,18 +901,14 @@ export default function AdminPanel() {
                           </thead>
                           <tbody>
                             {convsPage.map((c) => (
-                              <tr key={c.id} className="align-top">
+                              <tr key={c.id} className="align-top hover">
                                 <td className="font-mono text-xs">{c.id}</td>
                                 <td>
                                   <div className="font-medium">{c.contact?.name || "—"}</div>
                                   <div className="text-xs text-slate-500">{c.contact?.phone || ""}</div>
                                 </td>
-                                <td className="text-sm">
-                                  {getAgentName(c)}
-                                </td>
-                                <td className="text-sm">
-                                  {(Array.isArray(c.labels) ? c.labels : []).join(", ")}
-                                </td>
+                                <td className="text-sm">{getAgentName(c)}</td>
+                                <td className="text-sm">{(Array.isArray(c.labels) ? c.labels : []).join(", ")}</td>
                                 <td className="text-xs text-slate-600">
                                   {tsToMs(c.createdAt) ? new Date(tsToMs(c.createdAt)).toLocaleString() : "—"}
                                 </td>
@@ -946,9 +921,9 @@ export default function AdminPanel() {
                         </table>
                       </div>
 
-                      <div className="flex justify-between items-center mt-4">
+                      <div className="flex items-center justify-between mt-4">
                         <button
-                          className="px-3 py-2 bg-white rounded-lg border hover:bg-slate-50 disabled:opacity-50"
+                          className="px-3 py-2 bg-white border rounded-lg hover:bg-slate-50 disabled:opacity-50"
                           disabled={pageClamped <= 1}
                           onClick={() => setPage(p => Math.max(1, p - 1))}
                         >
@@ -958,7 +933,7 @@ export default function AdminPanel() {
                           Página {pageClamped} de {totalPages}
                         </div>
                         <button
-                          className="px-3 py-2 bg-white rounded-lg border hover:bg-slate-50 disabled:opacity-50"
+                          className="px-3 py-2 bg-white border rounded-lg hover:bg-slate-50 disabled:opacity-50"
                           disabled={pageClamped >= totalPages}
                           onClick={() => setPage(p => Math.min(totalPages, p + 1))}
                         >
@@ -975,9 +950,7 @@ export default function AdminPanel() {
 
         {tab === "tasks" && (
           <>
-            {/* NUEVO: Asignación de tareas a agentes (se conecta con la Agenda) */}
             <AdminAssignTask vendors={vendedoresActivos} />
-            {/* Panel de tareas existente (no se toca) */}
             <TasksPanel />
           </>
         )}
@@ -989,19 +962,19 @@ export default function AdminPanel() {
             onBack={() => setTab("dashboard")}
           />
         )}
- <div className="p-4">
-      <ConversacionesHoy
-        collectionName="conversations"
-        adsConfig={{
-          phoneIds: ["768483333020913", /* otros phoneIds de campañas */],
-          labelsMatch: ["ads", "publicidad", "meta_ads"],
-          considerUTM: true,
-        }}
-        pageLimit={500}
-      />
-    </div>
 
-
+        {/* Conversaciones Hoy embebido (no se toca la lógica) */}
+        <div className="p-4">
+          <ConversacionesHoy
+            collectionName="conversations"
+            adsConfig={{
+              phoneIds: ["768483333020913"],
+              labelsMatch: ["ads", "publicidad", "meta_ads"],
+              considerUTM: true,
+            }}
+            pageLimit={500}
+          />
+        </div>
       </div>
     </div>
   );

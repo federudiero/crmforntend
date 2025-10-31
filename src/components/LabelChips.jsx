@@ -1,9 +1,8 @@
+// src/components/LabelChips.jsx
 import React from "react";
 import { PRESET_LABELS } from "../lib/labels";
 
-const PRESET_MAP = new Map(PRESET_LABELS.map((l) => [l.slug, l]));
-
-// Mapa → clases DaisyUI
+// DaisyUI badge classes por color
 const COLOR_TO_BADGE = {
   primary: "badge-primary",
   secondary: "badge-secondary",
@@ -15,34 +14,68 @@ const COLOR_TO_BADGE = {
   neutral: "badge-neutral",
 };
 
-// Whitelist: si no coincide, va "neutral"
 const ALLOWED = new Set(Object.keys(COLOR_TO_BADGE));
 const normalizeColor = (c) => (ALLOWED.has(String(c)) ? String(c) : "neutral");
 
-export default function LabelChips({ labels, slugs, className = "" }) {
+// Normaliza clave (sin acentos, minúsculas, espacios -> guiones)
+const normalizeKey = (s = "") =>
+  String(s)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, "-")
+    .toLowerCase()
+    .trim();
+
+// ✅ PRESET_MAP indexado por slug normalizado
+const PRESET_MAP = new Map(
+  PRESET_LABELS.map((l) => [normalizeKey(l.slug || l.name || ""), l])
+);
+
+function LabelChips({ labels, slugs, className = "" }) {
   let items = [];
 
   if (Array.isArray(labels) && labels.length) {
+    // Caso: vienen objetos {name, slug, color}
     items = labels.map((l) => {
-      const slug = l.slug || l.id || String(l.name || "").toLowerCase();
-      const preset = PRESET_MAP.get(slug);
+      const rawSlug =
+        l.slug ||
+        l.id ||
+        normalizeKey(l.name || ""); // si no hay slug, lo derivamos del name
+      const norm = normalizeKey(rawSlug);
+      const preset = PRESET_MAP.get(norm);
       const color = normalizeColor(l.color || preset?.color || "neutral");
       return {
-        slug,
-        name: l.name || preset?.name || slug,
+        // usamos el slug normalizado para claves internas
+        slug: norm,
+        // 👇 mostramos SIEMPRE el nombre "humano"
+        name: l.name || preset?.name || rawSlug,
         color,
       };
     });
   } else if (Array.isArray(slugs) && slugs.length) {
+    // Caso: vienen slugs (strings)
     items = slugs.map((s) => {
-      const slug = String(s);
-      const preset = PRESET_MAP.get(slug);
+      const raw = String(s);
+      const norm = normalizeKey(raw);
+      const preset = PRESET_MAP.get(norm);
       const color = normalizeColor(preset?.color || "neutral");
       return {
-        slug,
-        name: preset?.name || slug,
+        slug: norm,
+        // 👇 mostramos el nombre de preset si existe; si no, el texto original
+        name: preset?.name || raw,
         color,
       };
+    });
+  }
+
+  // ✅ Deduplicado visual por clave normalizada (evita “día-lunes” vs “dia-lunes”)
+  if (items.length) {
+    const seen = new Set();
+    items = items.filter((l) => {
+      const key = l.slug || normalizeKey(l.name || "");
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
     });
   }
 
@@ -54,11 +87,13 @@ export default function LabelChips({ labels, slugs, className = "" }) {
         <span
           key={l.slug}
           className={`badge text-xs ${COLOR_TO_BADGE[l.color]}`}
-          title={l.slug}
+          title={l.name}         // <- si no querés tooltip, eliminá esta prop
         >
-          {l.name}
+          {l.name}               {/* <- SOLO el nombre visible */}
         </span>
       ))}
     </div>
   );
 }
+
+export default LabelChips;

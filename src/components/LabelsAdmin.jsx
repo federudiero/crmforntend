@@ -2,9 +2,29 @@
 import { useEffect, useMemo, useState } from "react";
 import { listAllLabels, createLabel, updateLabel, deleteLabel } from "../lib/labels";
 
-const COLORS = [
-  "primary","secondary","accent","info","success","warning","error","neutral"
-];
+const COLORS = ["primary","secondary","accent","info","success","warning","error","neutral"];
+
+/** Normaliza para slugs y claves de dedupe */
+const normalizeSlug = (s = "") =>
+  String(s)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")   // quita acentos
+    .replace(/\s+/g, "-")              // espacios -> guión
+    .toLowerCase()
+    .trim();
+
+/** Dedupe por slug normalizado (case/acentos-insensitive) */
+const dedupeBySlug = (arr) => {
+  const seen = new Set();
+  const out = [];
+  for (const it of arr) {
+    const key = normalizeSlug(it.slug || it.name || "");
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ ...it, slug: key });
+  }
+  return out;
+};
 
 export default function LabelsAdmin() {
   const [items, setItems] = useState([]);
@@ -12,25 +32,38 @@ export default function LabelsAdmin() {
   const [form, setForm] = useState({ name: "", slug: "", color: "neutral" });
   const [editing, setEditing] = useState(null);
 
-  const load = async () => setItems(await listAllLabels());
+  // Carga inicial y dedupe defensivo (por si la fuente trae variantes)
+  const load = async () => {
+    const raw = await listAllLabels();
+    setItems(dedupeBySlug(raw));
+  };
   useEffect(() => { load(); }, []);
 
+  // Filtro + dedupe (por si el filtro vuelve a mezclar resultados)
   const filtered = useMemo(() => {
     const t = q.trim().toLowerCase();
-    if (!t) return items;
-    return items.filter(i =>
-      i.name.toLowerCase().includes(t) ||
-      i.slug.toLowerCase().includes(t)
-    );
+    const base = !t
+      ? items
+      : items.filter(i =>
+          i.name?.toLowerCase().includes(t) ||
+          i.slug?.toLowerCase().includes(t)
+        );
+    return dedupeBySlug(base).sort((a,b)=>a.name.localeCompare(b.name,"es",{sensitivity:"base"}));
   }, [items, q]);
 
   const onSubmit = async (e) => {
     e.preventDefault();
-    if (!form.slug.trim()) return alert("Slug requerido (único, sin espacios)");
+    const clean = {
+      name: String(form.name || form.slug || "").trim(),
+      slug: normalizeSlug(form.slug || form.name),
+      color: form.color || "neutral",
+    };
+    if (!clean.slug) return alert("Slug requerido (único, sin espacios)");
+
     if (editing) {
-      await updateLabel(editing.id, form);
+      await updateLabel(editing.id, clean);
     } else {
-      await createLabel(form);
+      await createLabel(clean);
     }
     setForm({ name: "", slug: "", color: "neutral" });
     setEditing(null);
@@ -41,8 +74,13 @@ export default function LabelsAdmin() {
     <div className="space-y-4">
       <h2 className="text-xl font-bold">Etiquetas</h2>
 
-      <div className="flex gap-2 items-center">
-        <input className="w-72 input input-bordered" placeholder="Buscar…" value={q} onChange={(e)=>setQ(e.target.value)} />
+      <div className="flex items-center gap-2">
+        <input
+          className="w-72 input input-bordered"
+          placeholder="Buscar…"
+          value={q}
+          onChange={(e)=>setQ(e.target.value)}
+        />
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">
@@ -51,18 +89,31 @@ export default function LabelsAdmin() {
           <div className="card-body">
             <div className="divide-y">
               {filtered.map(l => (
-                <div key={l.id} className="flex gap-3 justify-between items-center py-3">
-                  <div className="flex gap-3 items-center">
-                    <div className={`badge badge-${l.color}`}>{l.name}</div>
+                <div key={l.id ?? l.slug} className="flex items-center justify-between gap-3 py-3">
+                  <div className="flex items-center gap-3">
+                    <div className={`badge badge-${l.color || "neutral"}`}>{l.name}</div>
                     <div className="text-xs opacity-60">/{l.slug}</div>
                   </div>
                   <div className="flex gap-2">
-                    <button className="btn btn-sm" onClick={()=>{ setEditing(l); setForm({ name:l.name, slug:l.slug, color:l.color }); }}>Editar</button>
-                    <button className="btn btn-sm btn-error" onClick={async()=>{
-                      if (!confirm(`Eliminar etiqueta "${l.name}"?`)) return;
-                      await deleteLabel(l.id);
-                      load();
-                    }}>Borrar</button>
+                    <button
+                      className="btn btn-sm"
+                      onClick={()=>{
+                        setEditing(l);
+                        setForm({ name: l.name, slug: l.slug, color: l.color || "neutral" });
+                      }}
+                    >
+                      Editar
+                    </button>
+                    <button
+                      className="btn btn-sm btn-error"
+                      onClick={async()=>{
+                        if (!confirm(`Eliminar etiqueta "${l.name}"?`)) return;
+                        await deleteLabel(l.id);
+                        load();
+                      }}
+                    >
+                      Borrar
+                    </button>
                   </div>
                 </div>
               ))}
@@ -75,21 +126,49 @@ export default function LabelsAdmin() {
         <form onSubmit={onSubmit} className="card bg-base-200">
           <div className="gap-3 card-body">
             <h3 className="font-semibold">{editing ? "Editar etiqueta" : "Nueva etiqueta"}</h3>
-            <input className="input input-bordered" placeholder="Nombre (visible)" value={form.name} onChange={(e)=>setForm(s=>({...s, name:e.target.value}))} required />
-            <input className="input input-bordered" placeholder="Slug (único, sin espacios)" value={form.slug} onChange={(e)=>setForm(s=>({...s, slug:e.target.value.replace(/\s+/g,'-').toLowerCase()}))} required />
+
+            <input
+              className="input input-bordered"
+              placeholder="Nombre (visible)"
+              value={form.name}
+              onChange={(e)=>setForm(s=>({ ...s, name:e.target.value }))}
+              required
+            />
+
+            <input
+              className="input input-bordered"
+              placeholder="Slug (único, sin espacios)"
+              value={form.slug}
+              onChange={(e)=>setForm(s=>({ ...s, slug: normalizeSlug(e.target.value) }))}
+              required
+            />
+
             <select
-  className="select select-bordered"
-  value={color}
-  onChange={(e) => setColor(e.target.value)}
->
-  {["primary","secondary","accent","info","success","warning","error","neutral"]
-    .map((c) => (
-      <option key={c} value={c}>{c}</option>
-  ))}
-</select>
+              className="select select-bordered"
+              value={form.color}
+              onChange={(e)=>setForm(s=>({ ...s, color: e.target.value }))}
+            >
+              {COLORS.map((c)=>(
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+
             <div className="flex gap-2">
-              <button className="btn btn-primary" type="submit">{editing ? "Guardar" : "Crear"}</button>
-              {editing && <button className="btn" type="button" onClick={()=>{ setEditing(null); setForm({ name:"", slug:"", color:"neutral" }); }}>Cancelar</button>}
+              <button className="btn btn-primary" type="submit">
+                {editing ? "Guardar" : "Crear"}
+              </button>
+              {editing && (
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={()=>{
+                    setEditing(null);
+                    setForm({ name:"", slug:"", color:"neutral" });
+                  }}
+                >
+                  Cancelar
+                </button>
+              )}
             </div>
           </div>
         </form>
