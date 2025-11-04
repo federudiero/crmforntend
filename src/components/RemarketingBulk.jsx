@@ -58,13 +58,24 @@ function fallbackForVar1FromTemplateBody(tplBody) {
 function sanitizeParamText(input) {
   if (input === "\u200B") return input; // respetar ZWSP cuando se usa
   let x = String(input ?? "");
-  x = x.replace(/[\r\t]+/g, " ");      // preserva \n
- x = x.replace(/\n{3,}/g, "\n\n");    // colapsa saltos excesivos
+
+  // 1) normalización básica
+  x = x.replace(/\r+/g, " ");   // quitar \r
+  x = x.replace(/\t+/g, " ");   // quitar \t
+
+  // 2) NUEVO: NO se permiten \n -> los convertimos en separadores
+  x = x.replace(/\n+/g, " • ");
+
+  // 3) espacios: colapsar y evitar 5+ consecutivos
   x = x.replace(/\s{2,}/g, " ");
   x = x.replace(/ {5,}/g, "    ");
+
   x = x.trim();
+
+  // 4) límite Meta por parámetro
   const MAX_PARAM_LEN = 1000;
   if (x.length > MAX_PARAM_LEN) x = x.slice(0, MAX_PARAM_LEN - 1) + "…";
+
   return x;
 }
 
