@@ -86,7 +86,7 @@ function LabelChips({ labels, slugs, className = "" }) {
       {items.map((l) => (
         <span
           key={l.slug}
-          className={`badge text-xs ${COLOR_TO_BADGE[l.color]}`}
+       className={`badge badge-outline text-xs ${COLOR_TO_BADGE[l.color]} text-base-content`}
           title={l.name}         // <- si no querés tooltip, eliminá esta prop
         >
           {l.name}               {/* <- SOLO el nombre visible */}

@@ -42,20 +42,20 @@ export default function usePresence({ getSellerPhone } = {}) {
           },
           { merge: true }
         );
-      } catch {}
+      } catch (e){console.error(e)}
 
       // Heartbeat cada 45s para mantener lastSeen fresco
       hbRef.current = setInterval(async () => {
         try {
           await updateDoc(userRef, { online: true, lastSeen: serverTimestamp() });
-        } catch {}
+        } catch (e){console.error(e)}
       }, 45_000);
 
       // Best-effort: offline al cerrar pestaña
       const onHide = async () => {
         try {
           await updateDoc(userRef, { online: false, lastSeen: serverTimestamp() });
-        } catch {}
+        } catch (e){console.error(e)}
       };
       window.addEventListener("pagehide", onHide);
       window.addEventListener("beforeunload", onHide);

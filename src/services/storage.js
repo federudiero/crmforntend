@@ -10,18 +10,30 @@ async function uploadViaBackend(file, conversationId) {
 
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 15000); // 15s timeout
-  const resp = await fetch(`${base}/api/upload`, { method: "POST", body: fd, signal: ctrl.signal });
+  const resp = await fetch(`${base}/api/upload`, {
+    method: "POST",
+    body: fd,
+    signal: ctrl.signal,
+  });
   clearTimeout(t);
   const data = await resp.json().catch(() => ({}));
-  if (!resp.ok || !data?.ok) throw new Error(data?.error || `Upload failed (${resp.status})`);
-  return { url: data.url, path: data.path, contentType: data.contentType, size: data.size };
+  if (!resp.ok || !data?.ok)
+    throw new Error(data?.error || `Upload failed (${resp.status})`);
+  return {
+    url: data.url,
+    path: data.path,
+    contentType: data.contentType,
+    size: data.size,
+  };
 }
 
 async function uploadViaSDK(file, destPath, opts = {}) {
   if (!storage) {
-    throw new Error("Firebase Storage no está disponible. Verifica la configuración del bucket.");
+    throw new Error(
+      "Firebase Storage no está disponible. Verifica la configuración del bucket."
+    );
   }
-  
+
   const type = (file?.type || "").toLowerCase();
   const r = ref(storage, destPath);
   const task = uploadBytesResumable(r, file, {
@@ -40,7 +52,12 @@ async function uploadViaSDK(file, destPath, opts = {}) {
       (error) => reject(error),
       async () => {
         const url = await getDownloadURL(task.snapshot.ref);
-        resolve({ url, path: r.fullPath, contentType: type, size: file.size || 0 });
+        resolve({
+          url,
+          path: r.fullPath,
+          contentType: type,
+          size: file.size || 0,
+        });
       }
     );
   });
@@ -51,14 +68,33 @@ async function uploadViaSDK(file, destPath, opts = {}) {
  */
 export async function uploadFile(file, destPath, opts = {}) {
   if (!file) throw new Error("Archivo requerido");
-  const allowed = opts.allowed || [
-    "image/jpeg","image/png","image/webp","image/gif",
-    "audio/mpeg","audio/ogg","audio/wav","audio/mp4","audio/aac",
-    "application/pdf",
-  ];
+
+  const allowed =
+    opts.allowed || [
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+      "image/gif",
+      "audio/mpeg",
+      "audio/ogg",
+      "audio/wav",
+      "audio/mp4",
+      "audio/aac",
+      "audio/webm",               // 👈 agregado
+      "audio/webm;codecs=opus",   // 👈 agregado (por las dudas)
+      "application/pdf",
+    ];
+
   const maxBytes = opts.maxBytes || 25 * 1024 * 1024;
-  const type = (file.type || "").toLowerCase();
-  if (!allowed.includes(type)) throw new Error(`Tipo no permitido: ${type}`);
+
+  const rawType = (file.type || "").toLowerCase();
+  // si viene con codec (audio/webm;codecs=opus) me quedo con la parte base
+  const baseType = rawType.split(";")[0];
+
+  const isAllowed =
+    allowed.includes(rawType) || allowed.includes(baseType);
+
+  if (!isAllowed) throw new Error(`Tipo no permitido: ${rawType}`);
   if (file.size > maxBytes) throw new Error("Archivo > 25MB");
 
   // conversationId viene en destPath: 'uploads/{conversationId}/...'

@@ -50,10 +50,10 @@ function tsToMillis(ts) {
 /** Skeleton simple */
 function RowSkeleton() {
   return (
-    <div className="border-t px-3 py-3 border-[#E3EFE7] bg-white animate-pulse">
-      <div className="w-40 h-3 bg-gray-200 rounded" />
-      <div className="w-56 h-2 mt-2 bg-gray-200 rounded" />
-      <div className="w-24 h-2 mt-2 bg-gray-200 rounded" />
+    <div className="px-4 py-3 border-b border-[#E3EFE7] bg-white animate-pulse">
+      <div className="w-40 h-3 rounded bg-slate-200" />
+      <div className="w-56 h-2 mt-2 rounded bg-slate-200" />
+      <div className="w-24 h-2 mt-2 rounded bg-slate-200" />
     </div>
   );
 }
@@ -69,7 +69,7 @@ export default function ConversationsList({ activeId, onSelect }) {
         content: "";
         position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
         background: #16a34a; animation: pulseBar 1.15s ease-in-out infinite;
-        border-top-left-radius: 4px; border-bottom-left-radius: 4px;
+        border-top-left-radius: 9999px; border-bottom-left-radius: 9999px;
       }
       @keyframes pulseBar { 0%,100% { opacity: .4; } 50% { opacity: 1; } }
       .ping-badge {
@@ -119,14 +119,21 @@ export default function ConversationsList({ activeId, onSelect }) {
     }
   }, []);
   const saveSeen = () => {
-    try { localStorage.setItem(SEEN_KEY, JSON.stringify(seenInboundRef.current)); } catch (e){console.error(e)}
+    try {
+      localStorage.setItem(SEEN_KEY, JSON.stringify(seenInboundRef.current));
+    } catch (e) {
+      console.error(e);
+    }
   };
   const loadSeenFor = async (ids) => {
     try {
       if (!user?.uid || !Array.isArray(ids) || ids.length === 0) return;
       for (const ids10 of chunk(ids, 10)) {
         const snap = await getDocs(
-          query(collection(db, "users", String(user.uid), "convSeen"), where(documentId(), "in", ids10))
+          query(
+            collection(db, "users", String(user.uid), "convSeen"),
+            where(documentId(), "in", ids10)
+          )
         );
         snap.forEach((docSnap) => {
           const id = String(docSnap.id);
@@ -203,16 +210,25 @@ export default function ConversationsList({ activeId, onSelect }) {
             lastDocRef.current = lastVisible;
           }
 
-          const rows = docs.map((d) => ({ id: d.id, ...d.data(), contact: null }));
+          const rows = docs.map((d) => ({
+            id: d.id,
+            ...d.data(),
+            contact: null,
+          }));
           const ids = rows.map((r) => r.id);
 
           // Contactos
           let contactsById = {};
           if (ids.length > 0) {
-            const chunks = chunk(ids, 10);
+            const chunksArr = chunk(ids, 10);
             const results = await Promise.all(
-              chunks.map((ids10) =>
-                getDocs(query(collection(db, "contacts"), where(documentId(), "in", ids10)))
+              chunksArr.map((ids10) =>
+                getDocs(
+                  query(
+                    collection(db, "contacts"),
+                    where(documentId(), "in", ids10)
+                  )
+                )
               )
             );
             for (const res of results) {
@@ -221,24 +237,32 @@ export default function ConversationsList({ activeId, onSelect }) {
               });
             }
           }
-          const withContacts = rows.map((r) => ({ ...r, contact: contactsById[r.id] || null }));
+          const withContacts = rows.map((r) => ({
+            ...r,
+            contact: contactsById[r.id] || null,
+          }));
 
-          // Merge: actualizo/insert los del primer lote dentro de la lista acumulada
+          // Merge
           setItems((prev) => {
             const map = new Map(prev.map((x) => [String(x.id), x]));
-            for (const r of withContacts) map.set(String(r.id), { ...(map.get(String(r.id)) || {}), ...r });
-            // ordenar por lastMessageAt desc
+            for (const r of withContacts) {
+              map.set(String(r.id), {
+                ...(map.get(String(r.id)) || {}),
+                ...r,
+              });
+            }
             const arr = Array.from(map.values());
-            arr.sort((a, b) => {
-              const ta = tsToMillis(a.lastMessageAt);
-              const tb = tsToMillis(b.lastMessageAt);
-              return tb - ta;
-            });
+            arr.sort(
+              (a, b) => tsToMillis(b.lastMessageAt) - tsToMillis(a.lastMessageAt)
+            );
             return arr;
           });
 
-          // cargar estado "visto" para estas ids
-          try { await loadSeenFor(ids); } catch (e) { console.error("loadSeenFor(realtime) error:", e); }
+          try {
+            await loadSeenFor(ids);
+          } catch (e) {
+            console.error("loadSeenFor(realtime) error:", e);
+          }
         } catch (e) {
           console.error("onSnapshot first-page error:", e);
         } finally {
@@ -265,7 +289,7 @@ export default function ConversationsList({ activeId, onSelect }) {
   // =========================
   const loadMore = async () => {
     if (isLoadingMore || !hasMore || tab === "etiquetas") return;
-    if (search.trim()) return; // si hay búsqueda activa, evitamos traer más para no gastar de más
+    if (search.trim()) return;
 
     const pageSize = 25;
     const cursor = lastDocRef.current;
@@ -285,10 +309,13 @@ export default function ConversationsList({ activeId, onSelect }) {
         return;
       }
 
-      const rows = snap.docs.map((d) => ({ id: d.id, ...d.data(), contact: null }));
+      const rows = snap.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+        contact: null,
+      }));
       const ids = rows.map((r) => r.id);
 
-      // contactos
       let contactsById = {};
       for (const ids10 of chunk(ids, 10)) {
         const res = await getDocs(
@@ -299,28 +326,32 @@ export default function ConversationsList({ activeId, onSelect }) {
         });
       }
 
-      const withContacts = rows.map((r) => ({ ...r, contact: contactsById[r.id] || null }));
+      const withContacts = rows.map((r) => ({
+        ...r,
+        contact: contactsById[r.id] || null,
+      }));
 
-      // append sin duplicar
       setItems((prev) => {
         const existingIds = new Set(prev.map((x) => String(x.id)));
         const appended = [...prev];
         for (const r of withContacts) {
           if (!existingIds.has(String(r.id))) appended.push(r);
         }
-        // ordenar por lastMessageAt desc (por si algún item venía mezclado)
-        appended.sort((a, b) => tsToMillis(b.lastMessageAt) - tsToMillis(a.lastMessageAt));
+        appended.sort(
+          (a, b) => tsToMillis(b.lastMessageAt) - tsToMillis(a.lastMessageAt)
+        );
         return appended;
       });
 
-      // update cursor
       const newLast = snap.docs[snap.docs.length - 1] || null;
       lastDocRef.current = newLast || lastDocRef.current;
 
-      // seen
-      try { await loadSeenFor(ids); } catch (e) { console.error("loadSeenFor(more) error:", e); }
+      try {
+        await loadSeenFor(ids);
+      } catch (e) {
+        console.error("loadSeenFor(more) error:", e);
+      }
 
-      // cortar si vino incompleto
       if (snap.size < pageSize) setHasMore(false);
     } catch (e) {
       console.error("loadMore error:", e);
@@ -329,25 +360,24 @@ export default function ConversationsList({ activeId, onSelect }) {
     }
   };
 
-  // IntersectionObserver para disparar loadMore al llegar al final
-const sentinelRef = useRef(null);
-useEffect(() => {
-  if (tab === "etiquetas" || loading) return;      // ⟵ esperar a que termine el primer load
-  const el = sentinelRef.current;
-  if (!el) return;
+  // IntersectionObserver
+  const sentinelRef = useRef(null);
+  useEffect(() => {
+    if (tab === "etiquetas" || loading) return;
+    const el = sentinelRef.current;
+    if (!el) return;
 
-  const io = new IntersectionObserver(
-    (entries) => {
-      const first = entries[0];
-      if (first?.isIntersecting) loadMore();
-    },
-    { root: null, rootMargin: "1200px 0px 1200px 0px", threshold: 0.01 }
-  );
+    const io = new IntersectionObserver(
+      (entries) => {
+        const first = entries[0];
+        if (first?.isIntersecting) loadMore();
+      },
+      { root: null, rootMargin: "1200px 0px 1200px 0px", threshold: 0.01 }
+    );
 
-  io.observe(el);
-  return () => io.disconnect();
-  // ⟵ quitamos sentinelRef.current; agregamos 'loading'
-}, [tab, hasMore, isLoadingMore, search, loading]);
+    io.observe(el);
+    return () => io.disconnect();
+  }, [tab, hasMore, isLoadingMore, search, loading]);
 
   // Helpers
   const isStarred = (c) =>
@@ -360,10 +390,9 @@ useEffect(() => {
   const canDelete = (c) => {
     if (!user?.uid) return false;
     if (isAdmin) return true;
-    return c.assignedToUid === user.uid; // solo el dueño asignado
+    return c.assignedToUid === user.uid;
   };
 
-  // Acciones rápidas (conservadas)
   const toggleStar = async (c) => {
     if (!user?.uid) return;
     const ref = doc(db, "conversations", c.id);
@@ -391,12 +420,10 @@ useEffect(() => {
         if (currentUid && currentUid !== user.uid) {
           throw new Error("Esta conversación ya está asignada a otro agente.");
         }
-        // 1) Asignar
         tx.update(ref, {
           assignedToUid: user.uid,
           assignedToName: user.displayName || user.email || "Agente",
         });
-        // 2) baseline "visto"
         const curInbound =
           tsToMillis(cur.lastInboundAt) || tsToMillis(cur.lastMessageAt);
         if (curInbound) {
@@ -408,7 +435,6 @@ useEffect(() => {
           saveSeen();
         }
       });
-      // persistir baseline "visto"
       try {
         const id = String(c.id);
         const inboundMillis = seenInboundRef.current[id] || 0;
@@ -466,26 +492,47 @@ useEffect(() => {
     }
   };
 
-  // Buscar por texto (nombre o número) + excluir eliminados
+  // Buscar por texto + excluir eliminados
   const filteredByText = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const base = items.filter((c) => !c.deletedAt);
-    if (!q) return base;
-    return base.filter((c) => {
-      const name = String(c.contact?.name || "").toLowerCase();
-      const id = String(c.id || "").toLowerCase();
-      return name.includes(q) || id.includes(q);
-    });
-  }, [items, search]);
+  const qText = search.trim().toLowerCase();
+  const base = items.filter((c) => !c.deletedAt);
+  if (!qText) return base;
 
-  // Filtros por pestaña (lista normal)
+  return base.filter((c) => {
+    const name = String(c.contact?.name || "").toLowerCase();
+    const id = String(c.id || "").toLowerCase();
+    const phone = String(c.contact?.phone || "").toLowerCase();
+    const lastText = String(c.lastMessageText || "").toLowerCase();
+    const labels = Array.isArray(c.labels)
+      ? c.labels.join(" ").toLowerCase()
+      : "";
+    const assigned = String(
+      c.assignedToName || c.assignedToUid || ""
+    ).toLowerCase();
+
+    // Si qText aparece en cualquiera de estos campos, la conversación entra
+    return (
+      name.includes(qText) ||
+      id.includes(qText) ||
+      phone.includes(qText) ||
+      lastText.includes(qText) ||
+      labels.includes(qText) ||
+      assigned.includes(qText)
+    );
+  });
+}, [items, search]);
+
+
+  // Filtros por pestaña
   const filtered = useMemo(() => {
     const base = filteredByText;
     if (tab === "mios" && user?.uid) {
       return base.filter((c) => c.assignedToUid === user.uid);
     }
     if (tab === "fav" && user?.uid) {
-      return base.filter((c) => Array.isArray(c.stars) && c.stars.includes(user.uid));
+      return base.filter(
+        (c) => Array.isArray(c.stars) && c.stars.includes(user.uid)
+      );
     }
     return base;
   }, [filteredByText, tab, user?.uid]);
@@ -504,7 +551,7 @@ useEffect(() => {
       setLabelsLoading(true);
       setLabelsError("");
       try {
-        const pageLim = 200; // lote grande
+        const pageLim = 200;
         let qBase = query(
           collection(db, "conversations"),
           orderBy("lastMessageAt", "desc"),
@@ -518,8 +565,14 @@ useEffect(() => {
           const snap = await getDocs(qRef);
           if (snap.empty) break;
 
-          const rows = snap.docs.map((d) => ({ id: d.id, ...d.data(), contact: null }));
-          const mine = rows.filter((c) => !c.deletedAt && c.assignedToUid === user.uid);
+          const rows = snap.docs.map((d) => ({
+            id: d.id,
+            ...d.data(),
+            contact: null,
+          }));
+          const mine = rows.filter(
+            (c) => !c.deletedAt && c.assignedToUid === user.uid
+          );
           out.push(...mine);
 
           last = snap.docs[snap.docs.length - 1];
@@ -528,7 +581,6 @@ useEffect(() => {
           if (cancelled) return;
         }
 
-        // contactos
         const ids = out.map((r) => r.id);
         let contactsById = {};
         for (const ids10 of chunk(ids, 10)) {
@@ -541,30 +593,42 @@ useEffect(() => {
           if (cancelled) return;
         }
 
-        const withContacts = out.map((r) => ({ ...r, contact: contactsById[r.id] || null }));
+        const withContacts = out.map((r) => ({
+          ...r,
+          contact: contactsById[r.id] || null,
+        }));
 
-        // seen
-        try { await loadSeenFor(ids); } catch (e) { console.error("loadSeenFor(labels) error:", e); }
+        try {
+          await loadSeenFor(ids);
+        } catch (e) {
+          console.error("loadSeenFor(labels) error:", e);
+        }
 
-        // ordenar final
-        withContacts.sort((a, b) => tsToMillis(b.lastMessageAt) - tsToMillis(a.lastMessageAt));
+        withContacts.sort(
+          (a, b) => tsToMillis(b.lastMessageAt) - tsToMillis(a.lastMessageAt)
+        );
 
         if (!cancelled) setLabelsAll(withContacts);
       } catch (err) {
         console.error("labels loadAll error:", err);
-        if (!cancelled) setLabelsError("No se pudieron cargar todas las etiquetas.");
+        if (!cancelled)
+          setLabelsError("No se pudieron cargar todas las etiquetas.");
       } finally {
         if (!cancelled) setLabelsLoading(false);
       }
     }
     loadAllForLabels();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [tab, user?.uid]);
 
-  // índice por etiqueta
-  const baseForLabels = tab === "etiquetas"
-    ? labelsAll
-    : (user?.uid ? filtered.filter((c) => c.assignedToUid === user?.uid) : []);
+  const baseForLabels =
+    tab === "etiquetas"
+      ? labelsAll
+      : user?.uid
+      ? filtered.filter((c) => c.assignedToUid === user?.uid)
+      : [];
 
   const labelsIndex = useMemo(() => {
     const map = new Map();
@@ -579,7 +643,9 @@ useEffect(() => {
       }
     }
     for (const entry of map.values()) {
-      entry.items.sort((a, b) => tsToMillis(b.lastMessageAt) - tsToMillis(a.lastMessageAt));
+      entry.items.sort(
+        (a, b) => tsToMillis(b.lastMessageAt) - tsToMillis(a.lastMessageAt)
+      );
     }
     return map;
   }, [baseForLabels]);
@@ -609,7 +675,6 @@ useEffect(() => {
     }
   };
 
-  // ========= Cálculo de "nuevo para mí" =========
   const isNewForMe = (c, isActive, assignedToMe) => {
     if (!assignedToMe) return false;
     if (isActive) return false;
@@ -621,57 +686,67 @@ useEffect(() => {
   };
 
   return (
-    <div className="flex flex-col min-h-0 h-full border-r bg-[#F6FBF7] border-[#CDEBD6]">
+    <div className="flex flex-col h-full min-h-0 border-r bg-gradient-to-b from-[#F1F8F4] to-[#E2F3E7] border-[#CDEBD6]">
       {AttentionStyles}
 
-      {/* Header superior: tabs + búsqueda (sin botones de paginado) */}
-      <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 p-2 border-b bg-[#E8F5E9] border-[#CDEBD6]">
-        {/* Tabs */}
-        <div className="flex overflow-x-auto max-w-full border rounded bg-white/70 border-[#CDEBD6]">
-          {[
-            ["todos", "Todos"],
-            ["mios", "Mis chats"],
-            ["fav", "Favoritos"],
-            ["etiquetas", "Por etiqueta"],
-          ].map(([key, label]) => (
-            <button
-              key={key}
-              className={
-                "px-3 py-2 text-sm whitespace-nowrap transition-colors " +
-                (tab === key
-                  ? "bg-[#2E7D32] text-white"
-                  : "bg-transparent hover:bg-[#E8F5E9]")
-              }
-              onClick={() => setTab(key)}
-              title={label}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        {/* Búsqueda */}
-        <input
-          className="flex-1 input input-sm bg-white input-bordered border-[#CDEBD6] focus:border-[#2E7D32] focus:outline-none"
-          placeholder="Buscar nombre o número…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-
-        {/* Estado de carga para etiquetas */}
-        {tab === "etiquetas" && (
-          <div className="ml-auto text-xs">
-            {labelsLoading ? (
-              <span className="badge badge-outline">Cargando todas las etiquetas…</span>
-            ) : labelsError ? (
-              <span className="text-red-600">{labelsError}</span>
-            ) : (
-              <span className="badge badge-success">
-                Etiquetas cargadas ({labelsAll.length})
-              </span>
-            )}
+      {/* Header superior */}
+      <div className="sticky top-0 z-10 border-b border-[#CDEBD6] bg-[#E6F5EC]/95 backdrop-blur-sm">
+        <div className="flex flex-wrap items-center gap-3 px-3 py-2">
+          {/* Tabs */}
+          <div className="flex overflow-x-auto max-w-full rounded-2xl bg-white/80 border border-[#CDEBD6] shadow-sm">
+            {[
+              ["todos", "Todos"],
+              ["mios", "Mis chats"],
+              ["fav", "Favoritos"],
+              ["etiquetas", "Por etiqueta"],
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                className={
+                  "px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-medium whitespace-nowrap rounded-2xl transition-all " +
+                  (tab === key
+                    ? "bg-[#2E7D32] text-white shadow-sm"
+                    : "text-slate-700 hover:bg-[#E8F5E9]")
+                }
+                onClick={() => setTab(key)}
+              >
+                {label}
+              </button>
+            ))}
           </div>
-        )}
+
+          {/* Búsqueda */}
+          <div className="flex items-center flex-1 min-w-[150px]">
+            <div className="relative w-full">
+              <span className="absolute inset-y-0 flex items-center text-sm left-3 text-slate-400">
+                🔍
+              </span>
+              <input
+                className="w-full pl-8 pr-3 py-1.5 text-sm rounded-xl border border-[#CDEBD6] bg-white/90 shadow-sm focus:outline-none focus:ring-2 focus:ring-[#2E7D32]/60"
+                placeholder="Buscar nombre o número…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* Estado etiquetas */}
+          {tab === "etiquetas" && (
+            <div className="ml-auto text-[11px]">
+              {labelsLoading ? (
+                <span className="px-2 py-1 border rounded-full bg-amber-50 text-amber-700 border-amber-200">
+                  Cargando etiquetas…
+                </span>
+              ) : labelsError ? (
+                <span className="text-red-600">{labelsError}</span>
+              ) : (
+                <span className="px-2 py-1 border rounded-full bg-emerald-50 text-emerald-700 border-emerald-200">
+                  Etiquetas cargadas ({labelsAll.length})
+                </span>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Contenido scrollable */}
@@ -698,10 +773,13 @@ useEffect(() => {
                   <div
                     key={c.id}
                     className={
-                      "border-t px-3 py-3 transition-colors border-[#E3EFE7] " +
-                      (isActive ? "bg-[#E8F5E9] " : "bg-white hover:bg-[#F1FAF3] ") +
-                      (lockedByOther ? "opacity-60 cursor-not-allowed " : "") +
-                      (showNew ? " new-reply " : "")
+                      "px-3 sm:px-4 py-2 sm:py-3 border-b border-[#E3EFE7] transition-colors " +
+                      (isActive
+                        ? "bg-[#DFF3E5]"
+                        : "bg-white/95 hover:bg-[#F3FAF6]") +
+                      " " +
+                      (lockedByOther ? "opacity-70 cursor-not-allowed" : "") +
+                      (showNew ? " new-reply" : "")
                     }
                     role="button"
                     tabIndex={0}
@@ -716,128 +794,145 @@ useEffect(() => {
                         : c.id
                     }
                   >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 font-mono text-sm truncate">
-                          {c.contact?.name || c.id}
-                          {showNew && <span className="ping-badge" title="Nuevo mensaje entrante" />}
+                    <div className="flex items-start justify-between gap-3">
+                      {/* info cliente */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <div className="font-mono text-sm font-semibold truncate text-slate-800">
+                            {c.contact?.name || c.id}
+                          </div>
+                          {showNew && (
+                            <span
+                              className="ping-badge"
+                              title="Nuevo mensaje entrante"
+                            />
+                          )}
                         </div>
+
                         {c.lastMessageText && (
-                          <div className="mt-1 text-xs text-gray-600 truncate">
+                          <div className="mt-1 text-xs text-slate-600 line-clamp-2">
                             {c.lastMessageText}
                           </div>
                         )}
-                        <div className="text-[11px] text-gray-500">
-                          {formatShort(c.lastMessageAt)}
+
+                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
+                          <span>{formatShort(c.lastMessageAt)}</span>
+                          {c.contact?.phone && (
+                            <span className="px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                              {c.contact.phone}
+                            </span>
+                          )}
                         </div>
+
                         <div className="mt-1">
                           <LabelChips slugs={slugs} />
                         </div>
+
+                        <div className="mt-1 text-[11px] text-slate-600">
+                          {c.assignedToUid ? (
+                            <span>
+                              Asignado a{" "}
+                              <b>
+                                {c.assignedToUid === user?.uid
+                                  ? "mí"
+                                  : c.assignedToName || c.assignedToUid}
+                              </b>
+                            </span>
+                          ) : (
+                            <span className="italic text-slate-400">
+                              {c.assignedToName ||
+                                (c.assignedToUid ? "Asignado" : "Sin asignar")}
+                            </span>
+                          )}
+                        </div>
                       </div>
 
-                      <div className="flex items-center gap-2 shrink-0">
-                        {assignedToMe ? (
+                      {/* acciones */}
+                      <div className="flex flex-col items-end gap-2 shrink-0">
+                        <div className="flex items-center gap-2">
+                          {assignedToMe ? (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                unassign(c);
+                              }}
+                              className="px-3 py-1 text-[11px] font-semibold rounded-full bg-emerald-600 text-white shadow-sm hover:bg-emerald-500 border border-emerald-700"
+                              title="Desasignarme"
+                            >
+                              Yo ✓
+                            </button>
+                          ) : c.assignedToUid ? (
+                            <button
+                              className="px-3 py-1 text-[11px] font-semibold rounded-full bg-rose-200 text-rose-800 border border-rose-300 cursor-not-allowed"
+                              disabled
+                              onClick={(e) => e.stopPropagation()}
+                              title={`Asignada a ${c.assignedToName || "otro agente"}`}
+                            >
+                              Ocupada
+                            </button>
+                          ) : (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                assignToMe(c);
+                              }}
+                              className="px-3 py-1 text-[11px] font-semibold rounded-full bg-emerald-600 text-white border border-emerald-700 shadow-sm hover:bg-emerald-500"
+                              title="Asignarme esta conversación"
+                            >
+                              Asignarme
+                            </button>
+                          )}
+
+                          {/* ☆/★ */}
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              unassign(c);
+                              if (lockedByOther) return;
+                              toggleStar(c);
                             }}
-                            className="border-0 btn btn-xs md:btn-sm"
-                            style={{ backgroundColor: "var(--color-error, #ef4444)", color: "#fff" }}
-                            title="Desasignarme"
+                            disabled={lockedByOther}
+                            className={
+                              "text-lg leading-none " +
+                              (lockedByOther
+                                ? "opacity-30 cursor-not-allowed"
+                                : isStarred(c)
+                                ? "text-yellow-400"
+                                : "text-slate-400 hover:text-slate-600")
+                            }
+                            title={
+                              lockedByOther
+                                ? `No podés marcar favoritos: asignada a ${c.assignedToName || "otro agente"}`
+                                : isStarred(c)
+                                ? "Quitar de favoritos"
+                                : "Agregar a favoritos"
+                            }
                           >
-                            Yo ✓
+                            {isStarred(c) ? "★" : "☆"}
                           </button>
-                        ) : c.assignedToUid ? (
-                          <button
-                            className="cursor-not-allowed btn btn-xs md:btn-sm"
-                            style={{
-                              backgroundColor: "var(--color-error, #ef4444)",
-                              borderColor: "var(--color-error, #ef4444)",
-                              color: "#fff",
-                            }}
-                            disabled
-                            onClick={(e) => e.stopPropagation()}
-                            title={`Asignada a ${c.assignedToName || "otro agente"}`}
-                          >
-                            Ocupada
-                          </button>
-                        ) : (
+
+                          {/* 🗑️ Eliminar */}
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              assignToMe(c);
+                              softDelete(c);
                             }}
-                            className="btn btn-xs md:btn-sm"
-                            style={{ backgroundColor: "#2E7D32", borderColor: "#2E7D32", color: "#fff" }}
-                            title="Asignarme esta conversación"
+                            disabled={!canDelete(c)}
+                            className={
+                              "px-2 py-1 rounded-full text-[11px] border " +
+                              (!canDelete(c)
+                                ? "border-slate-200 text-slate-300 cursor-not-allowed"
+                                : "border-red-400 text-red-500 hover:bg-red-50")
+                            }
+                            title={
+                              canDelete(c)
+                                ? "Eliminar conversación (soft delete)"
+                                : "Solo puede eliminarla el agente asignado"
+                            }
                           >
-                            Asignarme
+                            🗑️
                           </button>
-                        )}
-
-                        {/* ☆/★ */}
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (lockedByOther) return;
-                            toggleStar(c);
-                          }}
-                          disabled={lockedByOther}
-                          className={
-                            "text-xl leading-none " +
-                            (lockedByOther
-                              ? "opacity-30 cursor-not-allowed"
-                              : isStarred(c)
-                              ? "text-yellow-500"
-                              : "text-gray-400 hover:text-gray-600")
-                          }
-                          title={
-                            lockedByOther
-                              ? `No podés marcar favoritos: asignada a ${c.assignedToName || "otro agente"}`
-                              : isStarred(c)
-                              ? "Quitar de favoritos"
-                              : "Agregar a favoritos"
-                          }
-                        >
-                          {isStarred(c) ? "★" : "☆"}
-                        </button>
-
-                        {/* 🗑️ Eliminar (soft delete) */}
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            softDelete(c);
-                          }}
-                          disabled={!canDelete(c)}
-                          className={
-                            "btn btn-xs md:btn-sm " +
-                            (!canDelete(c)
-                              ? "btn-disabled"
-                              : "border border-red-500 text-red-600 hover:bg-red-50")
-                          }
-                          title={
-                            canDelete(c)
-                              ? "Eliminar conversación (soft delete)"
-                              : "Solo puede eliminarla el agente asignado"
-                          }
-                        >
-                          🗑️
-                        </button>
+                        </div>
                       </div>
-                    </div>
-
-                    <div className="mt-1 text-[11px] text-gray-600">
-                      {c.assignedToUid ? (
-                        <span>
-                          Asignado a{" "}
-                          <b>{c.assignedToUid === user?.uid ? "mí" : c.assignedToName || c.assignedToUid}</b>
-                        </span>
-                      ) : (
-                        <span className="italic text-gray-400">
-                          {c.assignedToName || (c.assignedToUid ? "Asignado" : "No asignado")}
-                        </span>
-                      )}
                     </div>
                   </div>
                 );
@@ -845,96 +940,104 @@ useEffect(() => {
 
             {/* Loader infinito / fin de lista */}
             {!loading && (
-              <div className="py-4">
-                {isLoadingMore && (
-                  <div className="px-3 text-sm text-center text-gray-500">Cargando más…</div>
-                )}
+              <div className="py-3 text-xs text-center text-slate-500">
+                {isLoadingMore && <div>Cargando más…</div>}
                 {!isLoadingMore && hasMore && (
                   <div ref={sentinelRef} className="h-6" aria-hidden />
                 )}
-                {!hasMore && (
-                  <div className="px-3 text-xs text-center text-gray-400">Fin de la lista</div>
-                )}
+                {!hasMore && <div>Fin de la lista</div>}
               </div>
             )}
 
             {!loading && filtered.length === 0 && (
-              <div className="px-4 py-8 text-sm text-center text-gray-500">
+              <div className="px-4 py-8 text-sm text-center text-slate-500">
                 No hay conversaciones para estos filtros.
               </div>
             )}
           </>
         ) : (
           // ===== Vista por etiqueta (TODAS, SIN paginar) =====
-          <div className="w-full overflow-x-hidden md:flex md:min-h-0">
+          <div className="w-full md:flex md:min-h-0">
             {/* Sidebar desktop */}
-            <aside className="hidden md:block w-64 overflow-y-auto border-r shrink-0 border-[#CDEBD6]">
-  <div className="p-2 border-b border-[#CDEBD6] bg-[#EAF7EE]">
-    <button
-      onClick={() => setSelectedLabel("__all__")}
-      className={
-        "w-full rounded px-3 py-2 text-left transition-colors " +
-        (selectedLabel === "__all__"
-          ? "bg-[#2E7D32] text-white"
-          : "hover:bg-[#E8F5E9]")
-      }
-      title="Mis etiquetas (todas agrupadas)"
-    >
-      Mis etiquetas
-    </button>
-  </div>
+            <aside className="hidden md:block w-64 border-r border-[#CDEBD6] bg-[#F2FAF5] overflow-y-auto shrink-0">
+              <div className="p-3 border-b border-[#CDEBD6] bg-[#E6F5EC]">
+                <button
+                  onClick={() => setSelectedLabel("__all__")}
+                  className={
+                    "w-full rounded-xl px-3 py-2 text-left text-sm font-semibold transition-colors " +
+                    (selectedLabel === "__all__"
+                      ? "bg-[#2E7D32] text-white shadow-sm"
+                      : "bg-white/80 hover:bg-[#E8F5E9]")
+                  }
+                  title="Mis etiquetas (todas agrupadas)"
+                >
+                  Mis etiquetas
+                </button>
+              </div>
 
-  {/* GRID de etiquetas */}
-  <div className="grid grid-cols-1 gap-2 p-3">
-    {sortedGroups.map(({ key, display, items }) => {
-      const isActive = normSlug(selectedLabel) === key;
-      const isNone = display === "__none__";
-      return (
-        <button
-          key={key}
-          onClick={() => setSelectedLabel(display)}
-          className={[
-            "w-full card shadow-sm border transition-colors px-3 py-2 text-left",
-            isActive
-              ? "bg-[#2E7D32] text-white border-[#2E7D32]"
-              : "bg-base-200 hover:bg-base-300 border-base-300",
-          ].join(" ")}
-          title={isNone ? "Sin etiqueta" : display}
-        >
-          <div className="flex items-center justify-between gap-2">
-            <div className="truncate">
-              {isNone ? (
-                <span className="badge badge-neutral">Sin etiqueta</span>
-              ) : (
-                <span className="font-medium">{display}</span>
-              )}
-            </div>
-            <span className={isActive ? "badge badge-outline" : "badge badge-ghost"}>
-              {items.length}
-            </span>
-          </div>
-        </button>
-      );
-    })}
-    {sortedGroups.length === 0 && !labelsLoading && (
-      <div className="text-sm text-gray-500">(No tenés conversaciones asignadas)</div>
-    )}
-  </div>
-</aside>
-
+              <div className="p-3 space-y-2">
+                {sortedGroups.map(({ key, display, items }) => {
+                  const isActive = normSlug(selectedLabel) === key;
+                  const isNone = display === "__none__";
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => setSelectedLabel(display)}
+                      className={
+                        "w-full rounded-xl border px-3 py-2 text-left text-sm transition-colors shadow-sm " +
+                        (isActive
+                          ? "bg-[#2E7D32] text-white border-[#2E7D32]"
+                          : "bg-white hover:bg-[#F2FAF5] border-[#D6EDE0]")
+                      }
+                      title={isNone ? "Sin etiqueta" : display}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="truncate">
+                          {isNone ? (
+                            <span className="px-2 py-0.5 text-[11px] rounded-full bg-slate-100 text-slate-500">
+                              Sin etiqueta
+                            </span>
+                          ) : (
+                            <span className="font-medium">{display}</span>
+                          )}
+                        </div>
+                        <span
+                          className={
+                            "px-2 py-0.5 text-[11px] rounded-full border " +
+                            (isActive
+                              ? "bg-white/20 border-white/60"
+                              : "bg-slate-50 border-slate-200 text-slate-600")
+                          }
+                        >
+                          {items.length}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+                {sortedGroups.length === 0 && !labelsLoading && (
+                  <div className="text-xs text-slate-500">
+                    (No tenés conversaciones asignadas)
+                  </div>
+                )}
+              </div>
+            </aside>
 
             {/* Selector mobile */}
-            <div className="w-full md:hidden sticky top-0 z-10 border-b border-[#CDEBD6] bg-[#EAF7EE] p-2">
-              <label className="block mb-1 text-xs text-gray-600">Etiqueta</label>
+            <div className="w-full md:hidden sticky top-0 z-10 border-b border-[#CDEBD6] bg-[#E6F5EC]/95 backdrop-blur-sm p-2">
+              <label className="block mb-1 text-[11px] text-slate-600">
+                Etiqueta
+              </label>
               <select
-                className="select select-sm w-full bg-white border-[#CDEBD6] focus:border-[#2E7D32] focus:outline-none"
+                className="w-full select select-sm bg-white border-[#CDEBD6] focus:border-[#2E7D32] focus:outline-none"
                 value={selectedLabel}
                 onChange={(e) => setSelectedLabel(e.target.value)}
               >
                 <option value="__all__">Mis etiquetas (agrupadas)</option>
                 {sortedGroups.map(({ key, display, items }) => (
                   <option key={key} value={display}>
-                    {display === "__none__" ? "Sin etiqueta" : display} ({items.length})
+                    {display === "__none__" ? "Sin etiqueta" : display} (
+                    {items.length})
                   </option>
                 ))}
               </select>
@@ -949,59 +1052,86 @@ useEffect(() => {
                   <RowSkeleton />
                 </div>
               ) : selectedLabel === "__all__" ? (
-                <div className="divide-y">
+                <div className="divide-y divide-[#E3EFE7]">
                   {sortedGroups.map(({ key, display, items }) => {
                     const isNone = display === "__none__";
                     return (
                       <details key={key} className="group">
-                        <summary className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-[#EAF7EE]">
+                        <summary className="flex items-center justify-between px-3 py-2 cursor-pointer bg-white/90 hover:bg-[#F2FAF5]">
                           <div className="truncate">
-  {isNone ? (
-    <span className="badge badge-neutral">Sin etiqueta</span>
-  ) : (
-    <LabelChips slugs={[display]} />
-  )}
-</div>
-
-                          <span className="text-xs text-gray-500">{items.length}</span>
+                            {isNone ? (
+                              <span className="px-2 py-0.5 text-[11px] rounded-full bg-slate-100 text-slate-500">
+                                Sin etiqueta
+                              </span>
+                            ) : (
+                              <LabelChips slugs={[display]} />
+                            )}
+                          </div>
+                          <span className="ml-3 text-xs text-slate-500">
+                            {items.length}
+                          </span>
                         </summary>
-                        <div className="p-2 space-y-1">
+                        <div className="px-3 pb-3 space-y-2 bg-[#F7FBF9]">
                           {items.map((c) => {
-                            const isActive = String(c.id) === String(activeId || "");
-                            const slugs = Array.isArray(c.labels) ? c.labels : [];
-                            const assignedToMe = user?.uid && c.assignedToUid === user?.uid;
-                            const lockedByOther = !!c.assignedToUid && !assignedToMe;
-                            const showNew = isNewForMe(c, isActive, !!assignedToMe);
+                            const isActive =
+                              String(c.id) === String(activeId || "");
+                            const slugs = Array.isArray(c.labels)
+                              ? c.labels
+                              : [];
+                            const assignedToMe =
+                              user?.uid && c.assignedToUid === user?.uid;
+                            const lockedByOther =
+                              !!c.assignedToUid && !assignedToMe;
+                            const showNew = isNewForMe(
+                              c,
+                              isActive,
+                              !!assignedToMe
+                            );
 
                             return (
                               <div
                                 key={c.id}
                                 className={
-                                  "rounded border bg-white px-3 py-2 transition-colors border-[#E3EFE7] " +
-                                  (isActive ? "bg-[#E8F5E9] " : "hover:bg-[#F1FAF3] ") +
-                                  (lockedByOther ? "opacity-60 cursor-not-allowed " : "") +
-                                  (showNew ? " new-reply " : "")
+                                  "rounded-xl border px-3 py-2 bg-white/95 transition-colors " +
+                                  (isActive
+                                    ? "bg-[#DFF3E5]"
+                                    : "hover:bg-[#F3FAF6]") +
+                                  " " +
+                                  (lockedByOther
+                                    ? "opacity-70 cursor-not-allowed"
+                                    : "") +
+                                  (showNew ? " new-reply" : "")
                                 }
                                 role="button"
                                 tabIndex={0}
                                 onClick={() => tryOpen(c)}
                                 onKeyDown={(e) => {
-                                  if ((e.key === "Enter" || e.key === " ") && canOpen(c))
+                                  if (
+                                    (e.key === "Enter" || e.key === " ") &&
+                                    canOpen(c)
+                                  )
                                     tryOpen(c);
                                 }}
                                 title={
                                   lockedByOther
-                                    ? `Asignada a ${c.assignedToName || "otro agente"}`
+                                    ? `Asignada a ${
+                                        c.assignedToName || "otro agente"
+                                      }`
                                     : c.id
                                 }
                               >
-                                <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-start justify-between gap-2">
                                   <div className="min-w-0">
                                     <div className="flex items-center gap-2 font-mono text-sm truncate">
                                       {c.contact?.name || c.id}
-                                      {showNew && <span className="ping-badge" title="Nuevo mensaje entrante" />}
+                                      {showNew && (
+                                        <span
+                                          className="ping-badge"
+                                          title="Nuevo mensaje entrante"
+                                        />
+                                      )}
                                     </div>
-                                    <div className="text-[11px] text-gray-500">
+                                    <div className="text-[11px] text-slate-500">
                                       {formatShort(c.lastMessageAt)}
                                     </div>
                                     <div className="mt-1">
@@ -1011,33 +1141,39 @@ useEffect(() => {
                                   <div className="flex items-center gap-2 shrink-0">
                                     {assignedToMe ? (
                                       <button
-                                        onClick={(e) => { e.stopPropagation(); unassign(c); }}
-                                        className="border-0 btn btn-xs md:btn-sm"
-                                        style={{ backgroundColor: "var(--color-error, #ef4444)", color: "#fff" }}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          unassign(c);
+                                        }}
+                                        className="px-3 py-1 text-[11px] font-semibold rounded-full bg-emerald-600 text-white border border-emerald-700"
                                         title="Desasignarme"
                                       >
                                         Yo ✓
                                       </button>
                                     ) : c.assignedToUid ? (
                                       <button
-                                        className="btn btn-xs md:btn-sm btn-disabled"
+                                        className="px-3 py-1 text-[11px] font-semibold rounded-full bg-rose-200 text-rose-800 border border-rose-300 cursor-not-allowed"
                                         disabled
                                         onClick={(e) => e.stopPropagation()}
-                                        title={`Asignada a ${c.assignedToName || "otro agente"}`}
+                                        title={`Asignada a ${
+                                          c.assignedToName || "otro agente"
+                                        }`}
                                       >
                                         Ocupada
                                       </button>
                                     ) : (
                                       <button
-                                        onClick={(e) => { e.stopPropagation(); assignToMe(c); }}
-                                        className="btn btn-xs md:btn-sm"
-                                        style={{ backgroundColor: "#2E7D32", borderColor: "#2E7D32", color: "#fff" }}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          assignToMe(c);
+                                        }}
+                                        className="px-3 py-1 text-[11px] font-semibold rounded-full bg-emerald-600 text-white border border-emerald-700"
                                         title="Asignarme esta conversación"
                                       >
                                         Asignarme
                                       </button>
                                     )}
-                                    {/* ☆/★ */}
+
                                     <button
                                       onClick={(e) => {
                                         e.stopPropagation();
@@ -1046,16 +1182,18 @@ useEffect(() => {
                                       }}
                                       disabled={lockedByOther}
                                       className={
-                                        "text-xl leading-none " +
+                                        "text-lg leading-none " +
                                         (lockedByOther
                                           ? "opacity-30 cursor-not-allowed"
                                           : isStarred(c)
-                                          ? "text-yellow-500"
-                                          : "text-gray-400 hover:text-gray-600")
+                                          ? "text-yellow-400"
+                                          : "text-slate-400 hover:text-slate-600")
                                       }
                                       title={
                                         lockedByOther
-                                          ? `No podés marcar favoritos: asignada a ${c.assignedToName || "otro agente"}`
+                                          ? `No podés marcar favoritos: asignada a ${
+                                              c.assignedToName || "otro agente"
+                                            }`
                                           : isStarred(c)
                                           ? "Quitar de favoritos"
                                           : "Agregar a favoritos"
@@ -1064,15 +1202,17 @@ useEffect(() => {
                                       {isStarred(c) ? "★" : "☆"}
                                     </button>
 
-                                    {/* 🗑️ Eliminar */}
                                     <button
-                                      onClick={(e) => { e.stopPropagation(); softDelete(c); }}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        softDelete(c);
+                                      }}
                                       disabled={!canDelete(c)}
                                       className={
-                                        "btn btn-xs md:btn-sm " +
+                                        "px-2 py-1 rounded-full text-[11px] border " +
                                         (!canDelete(c)
-                                          ? "btn-disabled"
-                                          : "border border-red-500 text-red-600 hover:bg-red-50")
+                                          ? "border-slate-200 text-slate-300 cursor-not-allowed"
+                                          : "border-red-400 text-red-500 hover:bg-red-50")
                                       }
                                       title={
                                         canDelete(c)
@@ -1084,15 +1224,23 @@ useEffect(() => {
                                     </button>
                                   </div>
                                 </div>
-                                <div className="mt-1 text-[11px] text-gray-600">
+                                <div className="mt-1 text-[11px] text-slate-600">
                                   {c.assignedToUid ? (
                                     <span>
                                       Asignado a{" "}
-                                      <b>{c.assignedToUid === user?.uid ? "mí" : c.assignedToName || c.assignedToUid}</b>
+                                      <b>
+                                        {c.assignedToUid === user?.uid
+                                          ? "mí"
+                                          : c.assignedToName ||
+                                            c.assignedToUid}
+                                      </b>
                                     </span>
                                   ) : (
-                                    <span className="italic text-gray-400">
-                                      {c.assignedToName || (c.assignedToUid ? "Asignado" : "No asignado")}
+                                    <span className="italic text-slate-400">
+                                      {c.assignedToName ||
+                                        (c.assignedToUid
+                                          ? "Asignado"
+                                          : "No asignado")}
                                     </span>
                                   )}
                                 </div>
@@ -1105,139 +1253,177 @@ useEffect(() => {
                   })}
                 </div>
               ) : (
-                <div className="p-2 space-y-2">
-                  {(labelsIndex.get(normSlug(selectedLabel))?.items || []).map((c) => {
-                    const isActive = String(c.id) === String(activeId || "");
-                    const slugs = Array.isArray(c.labels) ? c.labels : [];
-                    const assignedToMe = user?.uid && c.assignedToUid === user?.uid;
-                    const lockedByOther = !!c.assignedToUid && !assignedToMe;
-                    const showNew = isNewForMe(c, isActive, !!assignedToMe);
+                <div className="p-3 space-y-2">
+                  {(labelsIndex.get(normSlug(selectedLabel))?.items || []).map(
+                    (c) => {
+                      const isActive =
+                        String(c.id) === String(activeId || "");
+                      const slugs = Array.isArray(c.labels) ? c.labels : [];
+                      const assignedToMe =
+                        user?.uid && c.assignedToUid === user?.uid;
+                      const lockedByOther =
+                        !!c.assignedToUid && !assignedToMe;
+                      const showNew = isNewForMe(c, isActive, !!assignedToMe);
 
-                    return (
-                      <div
-                        key={c.id}
-                        className={
-                          "rounded border bg-white px-3 py-2 transition-colors border-[#E3EFE7] " +
-                          (isActive ? "bg-[#E8F5E9] " : "hover:bg-[#F1FAF3] ") +
-                          (lockedByOther ? "opacity-60 cursor-not-allowed " : "") +
-                          (showNew ? " new-reply " : "")
-                        }
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => tryOpen(c)}
-                        onKeyDown={(e) => {
-                          if ((e.key === "Enter" || e.key === " ") && canOpen(c)) tryOpen(c);
-                        }}
-                        title={
-                          lockedByOther
-                            ? `Asignada a ${c.assignedToName || "otro agente"}`
-                            : c.id
-                        }
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 font-mono text-sm truncate">
-                              {c.contact?.name || c.id}
-                              {showNew && <span className="ping-badge" title="Nuevo mensaje entrante" />}
+                      return (
+                        <div
+                          key={c.id}
+                          className={
+                            "rounded-xl border px-3 py-2 bg-white/95 transition-colors " +
+                            (isActive
+                              ? "bg-[#DFF3E5]"
+                              : "hover:bg-[#F3FAF6]") +
+                            " " +
+                            (lockedByOther
+                              ? "opacity-70 cursor-not-allowed"
+                              : "") +
+                            (showNew ? " new-reply" : "")
+                          }
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => tryOpen(c)}
+                          onKeyDown={(e) => {
+                            if (
+                              (e.key === "Enter" || e.key === " ") &&
+                              canOpen(c)
+                            )
+                              tryOpen(c);
+                          }}
+                          title={
+                            lockedByOther
+                              ? `Asignada a ${
+                                  c.assignedToName || "otro agente"
+                                }`
+                              : c.id
+                          }
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 font-mono text-sm truncate">
+                                {c.contact?.name || c.id}
+                                {showNew && (
+                                  <span
+                                    className="ping-badge"
+                                    title="Nuevo mensaje entrante"
+                                  />
+                                )}
+                              </div>
+                              <div className="text-[11px] text-slate-500">
+                                {formatShort(c.lastMessageAt)}
+                              </div>
+                              <div className="mt-1">
+                                <LabelChips slugs={slugs} />
+                              </div>
                             </div>
-                            <div className="text-[11px] text-gray-500">
-                              {formatShort(c.lastMessageAt)}
-                            </div>
-                            <div className="mt-1">
-                              <LabelChips slugs={slugs} />
+                            <div className="flex items-center gap-2 shrink-0">
+                              {assignedToMe ? (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    unassign(c);
+                                  }}
+                                  className="px-3 py-1 text-[11px] font-semibold rounded-full bg-emerald-600 text-white border border-emerald-700"
+                                  title="Desasignarme"
+                                >
+                                  Yo ✓
+                                </button>
+                              ) : c.assignedToUid ? (
+                                <button
+                                  className="px-3 py-1 text-[11px] font-semibold rounded-full bg-rose-200 text-rose-800 border border-rose-300 cursor-not-allowed"
+                                  disabled
+                                  onClick={(e) => e.stopPropagation()}
+                                  title={`Asignada a ${
+                                    c.assignedToName || "otro agente"
+                                  }`}
+                                >
+                                  Ocupada
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    assignToMe(c);
+                                  }}
+                                  className="px-3 py-1 text-[11px] font-semibold rounded-full bg-emerald-600 text-white border border-emerald-700"
+                                  title="Asignarme esta conversación"
+                                >
+                                  Asignarme
+                                </button>
+                              )}
+
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (lockedByOther) return;
+                                  toggleStar(c);
+                                }}
+                                disabled={lockedByOther}
+                                className={
+                                  "text-lg leading-none " +
+                                  (lockedByOther
+                                    ? "opacity-30 cursor-not-allowed"
+                                    : isStarred(c)
+                                    ? "text-yellow-400"
+                                    : "text-slate-400 hover:text-slate-600")
+                                }
+                                title={
+                                  lockedByOther
+                                    ? `No podés marcar favoritos: asignada a ${
+                                        c.assignedToName || "otro agente"
+                                      }`
+                                    : isStarred(c)
+                                    ? "Quitar de favoritos"
+                                    : "Agregar a favoritos"
+                                }
+                              >
+                                {isStarred(c) ? "★" : "☆"}
+                              </button>
+
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  softDelete(c);
+                                }}
+                                disabled={!canDelete(c)}
+                                className={
+                                  "px-2 py-1 rounded-full text-[11px] border " +
+                                  (!canDelete(c)
+                                    ? "border-slate-200 text-slate-300 cursor-not-allowed"
+                                    : "border-red-400 text-red-500 hover:bg-red-50")
+                                }
+                                title={
+                                  canDelete(c)
+                                    ? "Eliminar conversación (soft delete)"
+                                    : "Solo puede eliminarla el agente asignado"
+                                }
+                              >
+                                🗑️
+                              </button>
                             </div>
                           </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            {assignedToMe ? (
-                              <button
-                                onClick={(e) => { e.stopPropagation(); unassign(c); }}
-                                className="border-0 btn btn-xs md:btn-sm"
-                                style={{ backgroundColor: "var(--color-error, #ef4444)", color: "#fff" }}
-                                title="Desasignarme"
-                              >
-                                Yo ✓
-                              </button>
-                            ) : c.assignedToUid ? (
-                              <button
-                                className="btn btn-xs md:btn-sm btn-disabled"
-                                disabled
-                                onClick={(e) => e.stopPropagation()}
-                                title={`Asignada a ${c.assignedToName || "otro agente"}`}
-                              >
-                                Ocupada
-                              </button>
+                          <div className="mt-1 text-[11px] text-slate-600">
+                            {c.assignedToUid ? (
+                              <span>
+                                Asignado a{" "}
+                                <b>
+                                  {c.assignedToUid === user?.uid
+                                    ? "mí"
+                                    : c.assignedToName || c.assignedToUid}
+                                </b>
+                              </span>
                             ) : (
-                              <button
-                                onClick={(e) => { e.stopPropagation(); assignToMe(c); }}
-                                className="btn btn-xs md:btn-sm"
-                                style={{ backgroundColor: "#2E7D32", borderColor: "#2E7D32", color: "#fff" }}
-                                title="Asignarme esta conversación"
-                              >
-                                Asignarme
-                              </button>
+                              <span className="italic text-slate-400">
+                                {c.assignedToName ||
+                                  (c.assignedToUid
+                                    ? "Asignado"
+                                    : "No asignado")}
+                              </span>
                             )}
-                            {/* ☆/★ */}
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (lockedByOther) return;
-                                toggleStar(c);
-                              }}
-                              disabled={lockedByOther}
-                              className={
-                                "text-xl leading-none " +
-                                (lockedByOther
-                                  ? "opacity-30 cursor-not-allowed"
-                                  : isStarred(c)
-                                  ? "text-yellow-500"
-                                  : "text-gray-400 hover:text-gray-600")
-                              }
-                              title={
-                                lockedByOther
-                                  ? `No podés marcar favoritos: asignada a ${c.assignedToName || "otro agente"}`
-                                  : isStarred(c)
-                                  ? "Quitar de favoritos"
-                                  : "Agregar a favoritos"
-                              }
-                            >
-                              {isStarred(c) ? "★" : "☆"}
-                            </button>
-
-                            {/* 🗑️ Eliminar */}
-                            <button
-                              onClick={(e) => { e.stopPropagation(); softDelete(c); }}
-                              disabled={!canDelete(c)}
-                              className={
-                                "btn btn-xs md:btn-sm " +
-                                (!canDelete(c)
-                                  ? "btn-disabled"
-                                  : "border border-red-500 text-red-600 hover:bg-red-50")
-                              }
-                              title={
-                                canDelete(c)
-                                  ? "Eliminar conversación (soft delete)"
-                                  : "Solo puede eliminarla el agente asignado"
-                              }
-                            >
-                              🗑️
-                            </button>
                           </div>
                         </div>
-                        <div className="mt-1 text-[11px] text-gray-600">
-                          {c.assignedToUid ? (
-                            <span>
-                              Asignado a{" "}
-                              <b>{c.assignedToUid === user?.uid ? "mí" : c.assignedToName || c.assignedToUid}</b>
-                            </span>
-                          ) : (
-                            <span className="italic text-gray-400">
-                              {c.assignedToName || (c.assignedToUid ? "Asignado" : "No asignado")}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    }
+                  )}
                 </div>
               )}
             </section>

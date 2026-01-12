@@ -120,6 +120,13 @@ export default function Home() {
   const adminEmails = useMemo(() => ["alainismael95@gmail.com", "fede_rudiero@gmail.com"], []);
   const isAdmin = !!user?.email && adminEmails.includes(user.email);
 
+  // 🔒 Si el usuario es admin, aseguramos que el modal de remarketing esté cerrado
+  useEffect(() => {
+    if (isAdmin && showRemarketing) {
+      setShowRemarketing(false);
+    }
+  }, [isAdmin, showRemarketing]);
+
   // Verificar si el usuario puede acceder a la conversación
   const canAccess = useMemo(() => {
     if (!user || !currentConvMeta) return false;
@@ -238,14 +245,16 @@ export default function Home() {
             </div>
           )}
 
-          {/* Botón Remarketing disponible para todos (desktop) */}
-          <button
-            className="hidden px-3 py-1 text-sm border rounded md:inline-flex"
-            onClick={() => setShowRemarketing(true)}
-            title="Abrir Remarketing por plantillas"
-          >
-            Remarketing
-          </button>
+          {/* Botón Remarketing SOLO para no-admin (desktop) */}
+          {!isAdmin && (
+            <button
+              className="hidden px-3 py-1 text-sm border rounded md:inline-flex"
+              onClick={() => setShowRemarketing(true)}
+              title="Abrir Remarketing por plantillas"
+            >
+              Remarketing
+            </button>
+          )}
 
           {/* 👇 Botón Agenda (desktop) */}
           <button
@@ -360,8 +369,8 @@ export default function Home() {
         )}
       </div>
 
-      {/* Modal Remarketing */}
-      {showRemarketing && (
+      {/* Modal Remarketing — SOLO no-admin */}
+      {!isAdmin && showRemarketing && (
         <RemarketingBulk onClose={() => setShowRemarketing(false)} />
       )}
 

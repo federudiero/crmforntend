@@ -23,30 +23,36 @@ export default function Login() {
   };
 
   return (
-    <div className="flex justify-center items-center p-6 w-full min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-slate-100">
-      {/* Decoración de fondo */}
-      <div className="overflow-hidden absolute inset-0 pointer-events-none">
-        <div className="absolute -top-24 -left-24 w-72 h-72 rounded-full blur-3xl bg-fuchsia-500/20" />
-        <div className="absolute -right-24 -bottom-24 w-72 h-72 rounded-full blur-3xl bg-cyan-500/20" />
-      </div>
+    <div
+      className="relative flex items-center justify-center w-full min-h-screen p-6 bg-center bg-cover text-slate-100"
+      style={{
+        backgroundImage:
+          "url('https://res.cloudinary.com/doxadkm4r/image/upload/v1763408194/forest-7601671_1920_c5theu.jpg')",
+      }}
+    >
+      {/* Capa oscura para mejorar contraste */}
+      <div className="absolute inset-0 bg-slate-950/70" />
 
+      {/* Decoración de luces de colores */}
+      
+      {/* Contenido (formulario) */}
       <form
         onSubmit={submit}
-        className="relative w-full max-w-md rounded-2xl border shadow-2xl backdrop-blur-xl border-white/10 bg-white/5"
+        className="relative z-10 w-full max-w-md border shadow-2xl rounded-2xl backdrop-blur-xl border-white/10 bg-white/5"
       >
         {/* Header */}
         <div className="px-6 pt-6 pb-4">
-          <div className="flex gap-3 items-center">
-            <div className="relative w-10 h-10 rounded-xl shadow-md overflow-hidden">
-              <img 
-                src="/icono.jpg" 
-                alt="Logo CRM" 
-                className="w-full h-full object-cover"
+          <div className="flex items-center gap-3">
+            <div className="relative w-10 h-10 overflow-hidden shadow-md rounded-xl">
+              <img
+                src="/icono.jpg"
+                alt="Logo CRM"
+                className="object-cover w-full h-full"
               />
             </div>
             <div>
-              <h1 className="text-2xl font-bold tracking-tight">Ingresá</h1>
-              <p className="text-sm text-slate-300">Con tu usuario de Firebase</p>
+              <h1 className="text-2xl font-bold tracking-tight">CRM</h1>
+             
             </div>
           </div>
         </div>
@@ -55,12 +61,12 @@ export default function Login() {
           {/* Email */}
           <label className="text-sm font-medium text-slate-200">Email</label>
           <div className="relative mt-1">
-            <div className="flex absolute inset-y-0 left-3 items-center pointer-events-none">
+            <div className="absolute inset-y-0 flex items-center pointer-events-none left-3">
               <span className="text-slate-400">✉️</span>
             </div>
             <input
               type="email"
-              className="py-2.5 pr-3 pl-10 w-full rounded-xl border transition outline-none border-white/10 bg-white/5 text-slate-100 placeholder:text-slate-400 focus:ring-2 focus:ring-cyan-400/50 focus:border-cyan-400/40"
+              className="w-full py-2.5 pl-10 pr-3 rounded-xl border outline-none transition border-white/10 bg-white/5 text-slate-100 placeholder:text-slate-400 focus:ring-2 focus:ring-cyan-400/50 focus:border-cyan-400/40"
               placeholder="tu@email.com"
               autoFocus
               autoComplete="email"
@@ -71,14 +77,16 @@ export default function Login() {
 
           {/* Password */}
           <div className="mt-4">
-            <label className="text-sm font-medium text-slate-200">Contraseña</label>
-            <div className="flex relative items-center mt-1">
-              <div className="flex absolute inset-y-0 left-3 items-center pointer-events-none">
+            <label className="text-sm font-medium text-slate-200">
+              Contraseña
+            </label>
+            <div className="relative flex items-center mt-1">
+              <div className="absolute inset-y-0 flex items-center pointer-events-none left-3">
                 <span className="text-slate-400">🔒</span>
               </div>
               <input
                 type={show ? "text" : "password"}
-                className="py-2.5 pr-12 pl-10 w-full rounded-xl border transition outline-none border-white/10 bg-white/5 text-slate-100 placeholder:text-slate-400 focus:ring-2 focus:ring-fuchsia-400/50 focus:border-fuchsia-400/40"
+                className="w-full py-2.5 pl-10 pr-12 rounded-xl border outline-none transition border-white/10 bg-white/5 text-slate-100 placeholder:text-slate-400 focus:ring-2 focus:ring-fuchsia-400/50 focus:border-fuchsia-400/40"
                 placeholder="••••••••"
                 autoComplete="current-password"
                 value={password}
@@ -88,7 +96,7 @@ export default function Login() {
                 type="button"
                 onClick={() => setShow((s) => !s)}
                 title={show ? "Ocultar contraseña" : "Mostrar contraseña"}
-                className="inline-flex absolute right-2 justify-center items-center px-2.5 py-1.5 rounded-lg transition text-slate-300 hover:text-white hover:bg-white/10"
+                className="absolute right-2 inline-flex items-center justify-center px-2.5 py-1.5 rounded-lg text-slate-300 transition hover:text-white hover:bg-white/10"
               >
                 {show ? "🙈" : "👁️"}
               </button>
@@ -97,7 +105,7 @@ export default function Login() {
 
           {/* Error */}
           {err && (
-            <div className="px-3 py-2 mt-4 text-sm text-red-200 rounded-xl border border-red-500/40 bg-red-500/10">
+            <div className="px-3 py-2 mt-4 text-sm text-red-200 border border-red-500/40 bg-red-500/10 rounded-xl">
               {err}
             </div>
           )}
@@ -106,10 +114,10 @@ export default function Login() {
           <button
             type="submit"
             disabled={loading}
-            className="py-2.5 mt-5 mb-6 w-full font-semibold text-white bg-gradient-to-r from-fuchsia-500 to-cyan-500 rounded-xl shadow-lg transition shadow-fuchsia-500/20 disabled:opacity-60 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-white/40"
+            className="w-full py-2.5 mt-5 mb-6 font-semibold text-white rounded-xl bg-black shadow-lg shadow-fuchsia-500/20 transition focus:outline-none focus:ring-2 focus:ring-white/40 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {loading ? (
-              <span className="inline-flex gap-2 items-center">
+              <span className="inline-flex items-center gap-2">
                 <svg
                   className="w-4 h-4 animate-spin"
                   viewBox="0 0 24 24"
@@ -139,7 +147,7 @@ export default function Login() {
         </div>
 
         {/* Footer decorativo */}
-        <div className="w-full h-2 bg-gradient-to-r from-fuchsia-500 to-cyan-500 rounded-b-2xl" />
+        <div className="w-full h-2 rounded-b-2xl bg-gradient-to-r from-fuchsia-500 to-cyan-500" />
       </form>
     </div>
   );
