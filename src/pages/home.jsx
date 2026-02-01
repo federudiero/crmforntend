@@ -1,5 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+// src/pages/home.jsx
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useNavigate,
+  useParams,
+  useNavigationType,
+} from "react-router-dom";
 import { signOut } from "firebase/auth";
 import { auth, db, ensurePushToken, listenForegroundMessages } from "../firebase";
 import { doc, onSnapshot, updateDoc, serverTimestamp } from "firebase/firestore";
@@ -8,12 +13,12 @@ import { useAuthState } from "../hooks/useAuthState.js";
 import usePresence from "../hooks/usePresence";
 
 import ConversationsList from "../components/ConversationsList.jsx";
-import ChatWindow from "../components/ChatWindow.jsx";
+import ChatWindow from "../components/chatwindow/ChatWindow.jsx";
 import NewConversation from "../components/NewConversation.jsx";
 import AdminPanel from "../components/AdminPanel.jsx";
 import RemarketingBulk from "../components/RemarketingBulk.jsx";
 
-// 👇 NUEVO: import de la Agenda
+// 👇 Agenda
 import AgendaCalendario from "../components/AgendaCalendario.jsx";
 
 export default function Home() {
@@ -21,16 +26,17 @@ export default function Home() {
   const navigate = useNavigate();
   const { convId } = useParams();
 
+  // ✅ Para detectar deep link (push/notificación) y arreglar "Atrás"
+  const navType = useNavigationType();
+  const injectedRef = useRef(false);
+
   // activa presencia del vendedor apenas entra a Home (área de vendedor)
   usePresence({
-    // si tenés el teléfono del vendedor en algún store/ctx, devolvelo acá (opcional)
     getSellerPhone: () => null,
   });
 
   // UI local
   const [showRemarketing, setShowRemarketing] = useState(false);
-
-  // 👇 NUEVO: estado para abrir/cerrar la Agenda
   const [showAgenda, setShowAgenda] = useState(false);
 
   const [currentConvMeta, setCurrentConvMeta] = useState(null);
@@ -41,14 +47,33 @@ export default function Home() {
   const [mobileView, setMobileView] = useState(decoded ? "chat" : "list");
 
   useEffect(() => {
-    // si usás daisyUI theme
     document.documentElement.setAttribute("data-theme", "crm");
   }, []);
 
-  // Si cambia la URL (abrís una conversación), en mobile pasamos a "chat"
+  // ✅ CLAVE: sincronizar UI móvil con la URL SIEMPRE (atrás del teléfono = popstate)
   useEffect(() => {
-    if (decoded) setMobileView("chat");
+    setMobileView(decoded ? "chat" : "list");
   }, [decoded]);
+
+  // ✅ (opcional pero MUY recomendado): si entrás directo a /home/:convId (push/deeplink),
+  // inyecta una entrada /home detrás para que el botón Atrás vuelva a lista y no salga de la app.
+  useEffect(() => {
+    if (!decoded) return;
+    if (injectedRef.current) return;
+
+    const idx = window.history.state?.idx;
+
+    // navegación inicial/deeplink suele ser POP con idx=0 (o null) => no hay "atrás" interno
+    if (navType === "POP" && (idx === 0 || idx == null)) {
+      injectedRef.current = true;
+
+      const chatUrl = `/home/${encodeURIComponent(decoded)}`;
+
+      // Creamos "lista" como base del historial y luego empujamos el chat
+      navigate("/home", { replace: true });
+      Promise.resolve().then(() => navigate(chatUrl, { replace: false }));
+    }
+  }, [decoded, navType, navigate]);
 
   // ESC para cerrar remarketing o agenda
   useEffect(() => {
@@ -87,22 +112,19 @@ export default function Home() {
     return unsubscribe;
   }, [decoded]);
 
-  // === NUEVO: Push — token + navegar al tocar la notificación ===
+  // Push — token + navegar al tocar la notificación
   useEffect(() => {
     if (!user) return;
 
-    // Guarda/actualiza el token FCM del vendedor
     ensurePushToken();
 
-    // Mensajes en foreground (opcional: reemplazá por un toast/badge)
-    let unsub = () => {};
+    let unsub = () => { };
     (async () => {
       unsub = await listenForegroundMessages((info) => {
         console.log("[FCM] foreground:", info);
       });
     })();
 
-    // Mensaje del SW para navegar (cuando se toca la notificación)
     const onSwMsg = (event) => {
       if (event?.data?.__SW_NAVIGATE__) {
         const url = event.data.__SW_NAVIGATE__;
@@ -117,10 +139,13 @@ export default function Home() {
     };
   }, [user, navigate]);
 
-  const adminEmails = useMemo(() => ["alainismael95@gmail.com", "fede_rudiero@gmail.com"], []);
+  const adminEmails = useMemo(
+    () => ["alainismael95@gmail.com", "fede_rudiero@gmail.com"],
+    []
+  );
   const isAdmin = !!user?.email && adminEmails.includes(user.email);
 
-  // 🔒 Si el usuario es admin, aseguramos que el modal de remarketing esté cerrado
+  // Si el usuario es admin, aseguramos que el modal de remarketing esté cerrado
   useEffect(() => {
     if (isAdmin && showRemarketing) {
       setShowRemarketing(false);
@@ -130,8 +155,8 @@ export default function Home() {
   // Verificar si el usuario puede acceder a la conversación
   const canAccess = useMemo(() => {
     if (!user || !currentConvMeta) return false;
-    if (isAdmin) return true; // Admin puede acceder a todo
-    if (currentConvMeta.assignedToUid === user.uid) return true; // Usuario asignado puede acceder
+    if (isAdmin) return true;
+    if (currentConvMeta.assignedToUid === user.uid) return true;
     return false;
   }, [user, currentConvMeta, isAdmin]);
 
@@ -144,7 +169,7 @@ export default function Home() {
       await updateDoc(doc(db, "conversations", decoded), {
         assignedToUid: user.uid,
         assignedToEmail: user.email,
-        assignedAt: serverTimestamp()
+        assignedAt: serverTimestamp(),
       });
     } catch (error) {
       console.error("Error al asignarse la conversación:", error);
@@ -159,15 +184,26 @@ export default function Home() {
       <div className="w-full max-w-md p-6 bg-white border border-gray-200 rounded-lg shadow-lg dark:bg-gray-800 dark:border-gray-700">
         <div className="text-center">
           <div className="flex items-center justify-center w-16 h-16 mx-auto mb-4 bg-yellow-100 rounded-full dark:bg-yellow-900/20">
-            <svg className="w-8 h-8 text-yellow-600 dark:text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+            <svg
+              className="w-8 h-8 text-yellow-600 dark:text-yellow-400"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"
+              />
             </svg>
           </div>
           <h3 className="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
             Chat no asignado
           </h3>
           <p className="mb-6 text-gray-600 dark:text-gray-400">
-            Este chat no está asignado a vos. Para poder ver los mensajes y responder, necesitás asignártelo.
+            Este chat no está asignado a vos. Para poder ver los mensajes y responder,
+            necesitás asignártelo.
           </p>
           <button
             onClick={handleAssignToMe}
@@ -182,8 +218,8 @@ export default function Home() {
   );
 
   const openConv = (id) => {
-    navigate(`/home/${encodeURIComponent(id)}`);
-    setMobileView("chat"); // En móviles, al abrir una conv saltamos al chat
+    navigate(`/home/${encodeURIComponent(id)}`, { replace: false });
+    // ✅ no hace falta setMobileView acá: el effect de decoded lo hace solo
   };
 
   const currentConvId = decoded;
@@ -198,7 +234,9 @@ export default function Home() {
           lastSeen: serverTimestamp(),
         });
       }
-    } catch (e){console.log(e)}
+    } catch (e) {
+      console.log(e);
+    }
     await signOut(auth);
     navigate("/", { replace: true });
   };
@@ -215,7 +253,7 @@ export default function Home() {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Mobile: switch Lista/Chat */}
+          {/* Mobile: switch Lista/Chat (pero ✅ navegando por URL para que el back funcione) */}
           {!isAdmin && (
             <div className="join md:hidden">
               <button
@@ -225,11 +263,14 @@ export default function Home() {
                     ? "btn-success text-white"
                     : "bg-white text-black border-[#CDEBD6]")
                 }
-                onClick={() => setMobileView("list")}
+                onClick={() => {
+                  navigate("/home", { replace: false });
+                }}
                 title="Ver lista"
               >
                 Lista
               </button>
+
               <button
                 className={
                   "join-item btn btn-xs " +
@@ -237,7 +278,16 @@ export default function Home() {
                     ? "btn-success text-white"
                     : "bg-white text-black border-[#CDEBD6]")
                 }
-                onClick={() => setMobileView("chat")}
+                onClick={() => {
+                  if (currentConvId) {
+                    navigate(`/home/${encodeURIComponent(currentConvId)}`, {
+                      replace: false,
+                    });
+                  } else {
+                    // si no hay chat abierto, mandamos a lista
+                    navigate("/home", { replace: false });
+                  }
+                }}
                 title="Ver chat"
               >
                 Chat
@@ -245,7 +295,7 @@ export default function Home() {
             </div>
           )}
 
-          {/* Botón Remarketing SOLO para no-admin (desktop) */}
+          {/* Remarketing SOLO para no-admin (desktop) */}
           {!isAdmin && (
             <button
               className="hidden px-3 py-1 text-sm border rounded md:inline-flex"
@@ -256,7 +306,7 @@ export default function Home() {
             </button>
           )}
 
-          {/* 👇 Botón Agenda (desktop) */}
+          {/* Agenda (desktop) */}
           <button
             className="hidden px-3 py-1 text-sm border rounded md:inline-flex"
             onClick={() => setShowAgenda(true)}
@@ -265,7 +315,7 @@ export default function Home() {
             Agenda
           </button>
 
-          {/* Botones para vendedores (usuarios no-admin) */}
+          {/* Botones para vendedores */}
           {!isAdmin && <NewConversation onOpen={openConv} />}
 
           <button
@@ -284,9 +334,9 @@ export default function Home() {
           <AdminPanel />
         ) : (
           <>
-            {/* Desktop ≥ md: layout 4/8 clásico */}
+            {/* Desktop ≥ md */}
             <div className="hidden h-full grid-cols-12 md:grid">
-              <aside className="h-full min-h-0 col-span-4 overflow-y-auto border-r">
+              <aside className="h-full min-h-0 col-span-4 overflow-hidden border-r">
                 <ConversationsList
                   activeId={currentConvId || ""}
                   onSelect={openConv}
@@ -294,7 +344,6 @@ export default function Home() {
                 />
               </aside>
 
-              {/* ocupar todo el ancho del slot y ocultar overflow-x */}
               <main className="flex w-full h-full min-h-0 col-span-8 overflow-x-hidden">
                 {currentConvId ? (
                   canAccess ? (
@@ -314,9 +363,9 @@ export default function Home() {
               </main>
             </div>
 
-            {/* Mobile ≤ md: panel único conmutado */}
+            {/* Mobile ≤ md */}
             <div className="h-full md:hidden">
-              {/* 👇 Barra superior en móvil: Agenda + Remarketing, lado a lado */}
+              {/* Barra superior en móvil */}
               <div className="flex gap-2 p-2 border-b">
                 <button
                   className="flex-1 btn btn-sm"
@@ -334,36 +383,49 @@ export default function Home() {
                 </button>
               </div>
 
-              {mobileView === "list" && (
-                <div className="h-full min-h-0 overflow-hidden">
-                  <ConversationsList
-                    activeId={currentConvId || ""}
-                    onSelect={openConv}
-                    restrictOthers
-                  />
-                </div>
-              )}
-              {mobileView === "chat" && (
-                <div className="w-full h-full min-h-0 overflow-x-hidden">
-                  {currentConvId ? (
-                    canAccess ? (
-                      <ChatWindow
-                        key={currentConvId}
-                        conversationId={currentConvId}
-                        convMeta={currentConvMeta}
-                        onBack={() => setMobileView("list")}
-                        mobile
-                      />
-                    ) : (
-                      renderAssignPanel()
-                    )
+              {/* Lista: montada y ocultable */}
+              <div
+                className={
+                  "h-[calc(100%-56px)] min-h-0 overflow-hidden " +
+                  (mobileView === "list" ? "" : "hidden")
+                }
+              >
+                <ConversationsList
+                  activeId={currentConvId || ""}
+                  onSelect={openConv}
+                  restrictOthers
+                />
+              </div>
+
+              {/* Chat */}
+              <div
+                className={
+                  "h-[calc(100%-56px)] min-h-0 w-full overflow-x-hidden " +
+                  (mobileView === "chat" ? "" : "hidden")
+                }
+              >
+                {currentConvId ? (
+                  canAccess ? (
+                    <ChatWindow
+                      key={currentConvId}
+                      conversationId={currentConvId}
+                      convMeta={currentConvMeta}
+                      onBack={() => {
+                        // ✅ en vez de setMobileView, navegamos a /home.
+                        // el effect de decoded pone list automáticamente
+                        navigate("/home", { replace: false });
+                      }}
+                      mobile
+                    />
                   ) : (
-                    <div className="flex items-center justify-center h-full p-4 text-center text-gray-500">
-                      Abrí una conversación desde <b className="mx-1">Lista</b>.
-                    </div>
-                  )}
-                </div>
-              )}
+                    renderAssignPanel()
+                  )
+                ) : (
+                  <div className="flex items-center justify-center h-full p-4 text-center text-gray-500">
+                    Abrí una conversación desde <b className="mx-1">Lista</b>.
+                  </div>
+                )}
+              </div>
             </div>
           </>
         )}
@@ -374,19 +436,26 @@ export default function Home() {
         <RemarketingBulk onClose={() => setShowRemarketing(false)} />
       )}
 
-      {/* 👇 Modal con AgendaCalendario (responsive, grande) */}
+      {/* Modal Agenda */}
       {showAgenda && (
         <div className="modal modal-open">
           <div className="w-11/12 max-w-6xl modal-box">
             <div className="flex items-center justify-between gap-3 mb-2">
               <h3 className="text-lg font-bold">Agenda del vendedor</h3>
-              <button className="btn btn-sm" onClick={() => setShowAgenda(false)} aria-label="Cerrar">✕</button>
+              <button
+                className="btn btn-sm"
+                onClick={() => setShowAgenda(false)}
+                aria-label="Cerrar"
+              >
+                ✕
+              </button>
             </div>
-            {/* Altura grande con scroll interno para que no afecte el layout del chat */}
+
             <div className="h-[70vh] overflow-auto">
               <AgendaCalendario />
             </div>
           </div>
+
           <div className="modal-backdrop" onClick={() => setShowAgenda(false)}>
             <button>close</button>
           </div>

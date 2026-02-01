@@ -1,15 +1,19 @@
 // src/components/AdminPanel.jsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { auth, db } from "../firebase";
 import {
   addDoc,
   collection,
   getDocs,
   doc,
-  getDoc,
   onSnapshot,
   Timestamp,
   serverTimestamp,
+
+  // ✅ NUEVO: batch contacts (evita 1 getDoc por conversación)
+  query,
+  where,
+  documentId,
 } from "firebase/firestore";
 
 import AdminVendors from "./AdminVendors.jsx";
@@ -20,8 +24,16 @@ import VendorDetailPanel from "./VendorDetailPanel.jsx";
 import ConversacionesHoy from "./ConversacionesHoy.jsx";
 
 /* ========================= Helpers fecha ========================= */
-function startOfDay(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; }
-function endOfDay(d) { const x = new Date(d); x.setHours(23, 59, 59, 999); return x; }
+function startOfDay(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+function endOfDay(d) {
+  const x = new Date(d);
+  x.setHours(23, 59, 59, 999);
+  return x;
+}
 function ymd(d) {
   const x = new Date(d);
   const m = String(x.getMonth() + 1).padStart(2, "0");
@@ -36,6 +48,7 @@ function parseLocalYMD(s) {
     return new Date(s);
   }
 }
+
 // Zona horaria fija de negocio
 const BUSINESS_TZ = "America/Argentina/Cordoba";
 function ymdTZ(d) {
@@ -187,6 +200,13 @@ function cleanAgentLabel(s) {
   return val;
 }
 
+/* ========================= Batch helpers ========================= */
+function chunk(array, size = 10) {
+  const out = [];
+  for (let i = 0; i < array.length; i += size) out.push(array.slice(i, i + size));
+  return out;
+}
+
 /* =============================================================== */
 /* Form para asignar tareas a agentes (Admin → Agenda) */
 function AdminAssignTask({ vendors }) {
@@ -226,14 +246,8 @@ function AdminAssignTask({ vendors }) {
   async function handleCreate(e) {
     e?.preventDefault?.();
 
-    if (!form.userId) {
-      alert("Elegí un agente.");
-      return;
-    }
-    if (!form.titulo.trim()) {
-      alert("Escribí un título.");
-      return;
-    }
+    if (!form.userId) return alert("Elegí un agente.");
+    if (!form.titulo.trim()) return alert("Escribí un título.");
 
     setSaving(true);
     try {
@@ -351,9 +365,10 @@ export default function AdminPanel() {
   const [loading, setLoading] = useState(false);
   const [convs, setConvs] = useState([]);
   const [vendors, setVendors] = useState([]);
-
-  // mapa de users para presencia
   const [usersByUid, setUsersByUid] = useState({});
+
+  // ✅ mapa de contacts por id (evita N getDoc)
+  const contactsByIdRef = useRef({});
 
   // Filtros globales (sin agente)
   const [mode, setMode] = useState("7"); // soporta "today"
@@ -378,53 +393,92 @@ export default function AdminPanel() {
     return ["(todas)", ...Array.from(set).sort()];
   }, [vendors]);
 
-  // Carga datasets del dashboard + users presencia
+  // ✅ Suscripción users (presencia): UNA sola vez
   useEffect(() => {
-    if (tab !== "dashboard" && tab !== "tasks") return;
-    setLoading(true);
+    const unsub = onSnapshot(collection(db, "users"), (snap) => {
+      const map = {};
+      snap.forEach((d) => (map[d.id] = d.data()));
+      setUsersByUid(map);
+    });
+    return () => {
+      try {
+        unsub && unsub();
+      } catch { }
+    };
+  }, []);
 
-    let unsubUsers = null;
+  // ✅ Cargar vendors una vez (para zonas + resumen)
+  useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
-        // Conversaciones
-        const cs = await getDocs(collection(db, "conversations"));
-        const convRows = await Promise.all(
-          cs.docs.map(async (d) => {
-            let contact = null;
-            try {
-              const c = await getDoc(doc(db, "contacts", d.id));
-              contact = c.exists() ? c.data() : null;
-            } catch (e) {
-              console.error(e);
-            }
-            return { id: d.id, ...d.data(), contact };
-          })
-        );
-        setConvs(convRows);
-
-        // Vendedores (wabaNumbers)
         const vs = await getDocs(collection(db, "wabaNumbers"));
+        if (cancelled) return;
         setVendors(vs.docs.map((d) => ({ id: d.id, ...d.data() })));
+      } catch (e) {
+        console.error("load vendors failed:", e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-        // Users: presencia en tiempo real
-        unsubUsers = onSnapshot(collection(db, "users"), (snap) => {
-          const map = {};
-          snap.forEach((doc) => {
-            map[doc.id] = doc.data();
+  // ✅ Cargar conversaciones SOLO cuando estás en dashboard (y con contacts por batch)
+  useEffect(() => {
+    if (tab !== "dashboard") return;
+
+    let cancelled = false;
+
+    (async () => {
+      setLoading(true);
+      try {
+        // 1) Conversaciones (1 request)
+        const cs = await getDocs(collection(db, "conversations"));
+        if (cancelled) return;
+
+        const raw = cs.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+        // 2) Contacts en batches de 10 (en vez de getDoc por conv)
+        const ids = raw.map((c) => c.id).filter(Boolean);
+
+        // ⚠️ Guardrail para no spamear si tenés MUCHÍSIMAS convs
+        // (si querés, subilo; esto evita volver a resource-exhausted)
+        const MAX_CONTACTS_PREFETCH = 500; // ~50 requests (500/10)
+        const idsToFetch = ids.slice(0, MAX_CONTACTS_PREFETCH);
+
+        const contactsMap = { ...(contactsByIdRef.current || {}) };
+
+        // fetch solo los que no estén ya cacheados
+        const missing = idsToFetch.filter((id) => !contactsMap[id]);
+
+        for (const part of chunk(missing, 10)) {
+          if (cancelled) return;
+          const qs = query(collection(db, "contacts"), where(documentId(), "in", part));
+          const snap = await getDocs(qs);
+          snap.forEach((cd) => {
+            contactsMap[cd.id] = cd.data();
           });
-          setUsersByUid(map);
-        });
+        }
+
+        contactsByIdRef.current = contactsMap;
+
+        // 3) Merge (misma estructura que antes: conv + contact)
+        const merged = raw.map((c) => ({
+          ...c,
+          contact: contactsMap[c.id] || null,
+        }));
+
+        setConvs(merged);
+      } catch (e) {
+        console.error("load dashboard failed:", e);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
 
     return () => {
-      try {
-        unsubUsers && unsubUsers();
-      } catch (e) {
-        console.error(e);
-      }
+      cancelled = true;
     };
   }, [tab]);
 
@@ -464,12 +518,8 @@ export default function AdminPanel() {
     return convs.filter((c) => {
       const t =
         mode === "today"
-          ? tsToMs(c.lastInboundAt) ||
-            tsToMs(c.firstInboundAt) ||
-            tsToMs(c.createdAt)
-          : tsToMs(c.lastMessageAt) ||
-            tsToMs(c.updatedAt) ||
-            tsToMs(c.createdAt);
+          ? tsToMs(c.lastInboundAt) || tsToMs(c.firstInboundAt) || tsToMs(c.createdAt)
+          : tsToMs(c.lastMessageAt) || tsToMs(c.updatedAt) || tsToMs(c.createdAt);
       return t >= a && t <= b;
     });
   }, [convs, range, mode]);
@@ -565,11 +615,10 @@ export default function AdminPanel() {
     const name = userName || vendorName || assignedName;
     return name || (uid ? uid : "Sin asignar");
   };
+
   const kpis = useMemo(() => {
     const total = convsFiltered.length;
-    const sinAsignar = convsFiltered.filter(
-      (c) => !c.assignedToUid && !c.assignedToName
-    ).length;
+    const sinAsignar = convsFiltered.filter((c) => !c.assignedToUid && !c.assignedToName).length;
 
     const porEtiqueta = {};
     for (const c of convsFiltered) {
@@ -606,6 +655,7 @@ export default function AdminPanel() {
         .map(([k, v]) => ({ k, v })),
     [kpis.porEtiqueta]
   );
+
   const agentesData = useMemo(
     () =>
       Object.entries(kpis.porAgente)
@@ -629,10 +679,8 @@ export default function AdminPanel() {
       .map(([k, v]) => ({ k, v }));
   }, [convsFiltered, usersByUid, vendorNameByUid]);
 
-  const vendedoresActivos = useMemo(
-    () => vendors.filter((v) => !!v.active),
-    [vendors]
-  );
+  const vendedoresActivos = useMemo(() => vendors.filter((v) => !!v.active), [vendors]);
+
   const vendedoresPorZona = useMemo(() => {
     const map = {};
     for (const v of vendedoresActivos) {
@@ -692,8 +740,7 @@ export default function AdminPanel() {
                 Panel de Administración
               </h1>
               <p className="max-w-xl text-sm sm:text-base text-slate-300">
-                Vista central para controlar conversaciones, vendedores, plantillas,
-                etiquetas y tareas del equipo.
+                Vista central para controlar conversaciones, vendedores, plantillas, etiquetas y tareas del equipo.
               </p>
             </div>
             <div className="flex flex-col items-start gap-2 text-xs text-slate-300 md:items-end">
@@ -715,12 +762,9 @@ export default function AdminPanel() {
         <section className="p-6 space-y-4 border shadow-lg rounded-2xl bg-white/95 backdrop-blur-md">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h3 className="mb-1 text-xl font-bold text-slate-900">
-                🌍 Vendedores activos por zona
-              </h3>
+              <h3 className="mb-1 text-xl font-bold text-slate-900">🌍 Vendedores activos por zona</h3>
               <p className="text-sm text-slate-500">
-                Mapa rápido de cobertura de cada zona y presencia online de los
-                vendedores.
+                Mapa rápido de cobertura de cada zona y presencia online de los vendedores.
               </p>
             </div>
           </div>
@@ -739,9 +783,7 @@ export default function AdminPanel() {
                     <div>
                       <div className="font-semibold text-slate-800">{zona}</div>
                       <div className="text-xs text-slate-500">
-                        {arr.length > 0
-                          ? "Vendedores asignados a esta zona."
-                          : "Sin vendedores activos asignados."}
+                        {arr.length > 0 ? "Vendedores asignados a esta zona." : "Sin vendedores activos asignados."}
                       </div>
                     </div>
                   </div>
@@ -752,8 +794,7 @@ export default function AdminPanel() {
 
                 <ul className="space-y-2">
                   {arr.map((v) => {
-                    const uid =
-                      v.ownerUid || v.userUid || v.uid || v.id;
+                    const uid = v.ownerUid || v.userUid || v.uid || v.id;
                     const u = usersByUid[uid];
                     const online = calcOnline(u);
                     return (
@@ -763,34 +804,22 @@ export default function AdminPanel() {
                       >
                         <span className="text-sm font-medium text-slate-700">
                           {v.alias || v.owner || v.phone}
-                          {v.phone ? (
-                            <span className="text-xs text-slate-400">
-                              {" "}
-                              · {v.phone}
-                            </span>
-                          ) : null}
+                          {v.phone ? <span className="text-xs text-slate-400"> · {v.phone}</span> : null}
                         </span>
 
                         <div className="flex items-center gap-2">
                           <span
-                            className={`px-2 py-1 text-[11px] rounded-full flex items-center gap-1 ${
-                              online
+                            className={`px-2 py-1 text-[11px] rounded-full flex items-center gap-1 ${online
                                 ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
                                 : "bg-rose-50 text-rose-700 border border-rose-200"
-                            }`}
+                              }`}
                             title={
                               u?.lastSeen
-                                ? `Visto: ${new Date(
-                                    tsToMs(u.lastSeen)
-                                  ).toLocaleString()}`
+                                ? `Visto: ${new Date(tsToMs(u.lastSeen)).toLocaleString()}`
                                 : undefined
                             }
                           >
-                            <span
-                              className={`w-2 h-2 rounded-full ${
-                                online ? "bg-emerald-500" : "bg-rose-500"
-                              }`}
-                            />
+                            <span className={`w-2 h-2 rounded-full ${online ? "bg-emerald-500" : "bg-rose-500"}`} />
                             {online ? "Online" : "Offline"}
                           </span>
 
@@ -825,11 +854,10 @@ export default function AdminPanel() {
             ].map(({ key, label }) => (
               <button
                 key={key}
-                className={`px-5 py-2.5 rounded-2xl text-sm font-medium transition-all duration-200 ${
-                  tab === key
+                className={`px-5 py-2.5 rounded-2xl text-sm font-medium transition-all duration-200 ${tab === key
                     ? "text-white shadow-lg shadow-blue-500/25 bg-gradient-to-r from-blue-600 to-indigo-600"
                     : "text-slate-700 bg-white/0 hover:bg-slate-100 hover:shadow-sm"
-                }`}
+                  }`}
                 onClick={() => setTab(key)}
               >
                 {label}
@@ -848,9 +876,7 @@ export default function AdminPanel() {
             {loading && (
               <div className="flex flex-col items-center justify-center gap-3 py-12">
                 <div className="w-10 h-10 border-2 border-transparent rounded-full border-b-blue-600 animate-spin" />
-                <span className="text-sm font-medium text-slate-600">
-                  Cargando datos del dashboard…
-                </span>
+                <span className="text-sm font-medium text-slate-600">Cargando datos del dashboard…</span>
               </div>
             )}
 
@@ -860,9 +886,7 @@ export default function AdminPanel() {
                 <section className="p-6 space-y-6 border shadow-lg rounded-2xl bg-white/95 backdrop-blur-md">
                   <div className="flex flex-wrap items-end gap-4">
                     <div className="space-y-2">
-                      <label className="text-sm font-semibold text-slate-700">
-                        Período
-                      </label>
+                      <label className="text-sm font-semibold text-slate-700">Período</label>
                       <select
                         className="px-4 py-2 text-sm transition-all border rounded-xl border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                         value={mode}
@@ -879,9 +903,7 @@ export default function AdminPanel() {
                     {mode === "custom" && (
                       <>
                         <div className="space-y-2">
-                          <label className="text-sm font-semibold text-slate-700">
-                            Desde
-                          </label>
+                          <label className="text-sm font-semibold text-slate-700">Desde</label>
                           <input
                             type="date"
                             className="px-4 py-2 text-sm transition-all border rounded-xl border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -890,9 +912,7 @@ export default function AdminPanel() {
                           />
                         </div>
                         <div className="space-y-2">
-                          <label className="text-sm font-semibold text-slate-700">
-                            Hasta
-                          </label>
+                          <label className="text-sm font-semibold text-slate-700">Hasta</label>
                           <input
                             type="date"
                             className="px-4 py-2 text-sm transition-all border rounded-xl border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -904,9 +924,7 @@ export default function AdminPanel() {
                     )}
 
                     <div className="space-y-2">
-                      <label className="text-sm font-semibold text-slate-700">
-                        Zona
-                      </label>
+                      <label className="text-sm font-semibold text-slate-700">Zona</label>
                       <select
                         className="px-4 py-2 text-sm transition-all border rounded-xl border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                         value={zoneFilter}
@@ -921,9 +939,7 @@ export default function AdminPanel() {
                     </div>
 
                     <div className="flex-1 min-w-[200px] space-y-2">
-                      <label className="text-sm font-semibold text-slate-700">
-                        Buscar
-                      </label>
+                      <label className="text-sm font-semibold text-slate-700">Buscar</label>
                       <input
                         type="text"
                         placeholder="Buscar por nombre o ID de conversación…"
@@ -964,17 +980,13 @@ export default function AdminPanel() {
                   {/* Filtro de etiquetas */}
                   <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <div className="space-y-2">
-                      <label className="text-sm font-semibold text-slate-700">
-                        Etiquetas
-                      </label>
+                      <label className="text-sm font-semibold text-slate-700">Etiquetas</label>
                       <select
                         multiple
                         className="min-h-[110px] w-full px-4 py-2 text-sm rounded-xl border border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                         value={labelFilter}
                         onChange={(e) => {
-                          const vals = Array.from(
-                            e.target.selectedOptions
-                          ).map((o) => o.value);
+                          const vals = Array.from(e.target.selectedOptions).map((o) => o.value);
                           setLabelFilter(vals);
                         }}
                       >
@@ -998,62 +1010,27 @@ export default function AdminPanel() {
                     </div>
 
                     <div className="space-y-2 opacity-80">
-                      <label className="text-sm font-semibold text-slate-700">
-                        Agentes
-                      </label>
+                      <label className="text-sm font-semibold text-slate-700">Agentes</label>
                       <div className="px-4 py-3 text-sm border border-dashed rounded-xl bg-slate-50 text-slate-500">
-                        El filtrado por vendedor/agente se hace en el detalle
-                        (VendorDetailPanel).
+                        El filtrado por vendedor/agente se hace en el detalle (VendorDetailPanel).
                       </div>
                     </div>
                   </div>
 
                   <div className="flex justify-end text-xs text-slate-500">
                     Mostrando{" "}
-                    <span className="mx-1 font-semibold text-slate-700">
-                      {convsFiltered.length}
-                    </span>
+                    <span className="mx-1 font-semibold text-slate-700">{convsFiltered.length}</span>
                     conversaciones en el rango seleccionado.
                   </div>
                 </section>
 
                 {/* KPIs principales */}
                 <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
-                  <MiniStatCard
-                    title="Total conversaciones"
-                    value={kpis.total}
-                    from="#e6f0ff"
-                    to="#eaf3ff"
-                    text="#1e40af"
-                  />
-                  <MiniStatCard
-                    title="Sin asignar"
-                    value={kpis.sinAsignar}
-                    from="#fff1cc"
-                    to="#fff4d6"
-                    text="#7c2d12"
-                  />
-                  <MiniStatCard
-                    title="Zonas activas"
-                    value={Object.keys(vendedoresPorZona).length}
-                    from="#dcfce7"
-                    to="#e7f9ef"
-                    text="#064e3b"
-                  />
-                  <MiniStatCard
-                    title="Vendedores activos"
-                    value={vendedoresActivos.length}
-                    from="#f5ebff"
-                    to="#f3e8ff"
-                    text="#4c1d95"
-                  />
-                  <MiniStatCard
-                    title="Vendedores en esta zona"
-                    value={vendedoresEnZona}
-                    from="#e6f0ff"
-                    to="#eaf3ff"
-                    text="#312e81"
-                  />
+                  <MiniStatCard title="Total conversaciones" value={kpis.total} from="#e6f0ff" to="#eaf3ff" text="#1e40af" />
+                  <MiniStatCard title="Sin asignar" value={kpis.sinAsignar} from="#fff1cc" to="#fff4d6" text="#7c2d12" />
+                  <MiniStatCard title="Zonas activas" value={Object.keys(vendedoresPorZona).length} from="#dcfce7" to="#e7f9ef" text="#064e3b" />
+                  <MiniStatCard title="Vendedores activos" value={vendedoresActivos.length} from="#f5ebff" to="#f3e8ff" text="#4c1d95" />
+                  <MiniStatCard title="Vendedores en esta zona" value={vendedoresEnZona} from="#e6f0ff" to="#eaf3ff" text="#312e81" />
                 </div>
 
                 {/* Conversaciones por día */}
@@ -1093,9 +1070,7 @@ export default function AdminPanel() {
                   title="👥 Conversaciones por agente"
                   accent="#7c3aed"
                   data={agentesData}
-                  formatter={(k) =>
-                    String(k).replace(/\s*\([^)]*\)\s*$/, "")
-                  }
+                  formatter={(k) => String(k).replace(/\s*\([^)]*\)\s*$/, "")}
                   exportBtn={
                     <button
                       className="px-4 py-2 text-xs text-white shadow-lg sm:text-sm rounded-xl bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700"
@@ -1107,12 +1082,7 @@ export default function AdminPanel() {
                 />
 
                 {/* Ventas por vendedor */}
-                <ListStatCard
-                  title="🛒 Ventas por vendedor"
-                  accent="#16a34a"
-                  data={ventasPorAgente}
-                  formatter={(k) => String(k)}
-                />
+                <ListStatCard title="🛒 Ventas por vendedor" accent="#16a34a" data={ventasPorAgente} formatter={(k) => String(k)} />
 
                 {/* Tabla de conversaciones */}
                 <section className="p-6 space-y-4 border shadow rounded-2xl bg-white/95 backdrop-blur-md">
@@ -1124,11 +1094,7 @@ export default function AdminPanel() {
                       </span>
                     </h3>
                     <div className="text-xs sm:text-sm text-slate-600">
-                      Mostrando{" "}
-                      <span className="font-semibold">
-                        {convsPage.length}
-                      </span>{" "}
-                      de {totalItems} (pág. {pageClamped}/{totalPages})
+                      Mostrando <span className="font-semibold">{convsPage.length}</span> de {totalItems} (pág. {pageClamped}/{totalPages})
                     </div>
                   </div>
 
@@ -1142,56 +1108,31 @@ export default function AdminPanel() {
                         <table className="table table-sm">
                           <thead className="bg-base-200/70">
                             <tr>
-                              <th className="text-xs whitespace-nowrap">
-                                ID
-                              </th>
+                              <th className="text-xs whitespace-nowrap">ID</th>
                               <th className="text-xs">Contacto</th>
                               <th className="text-xs">Asignado</th>
                               <th className="text-xs">Etiquetas</th>
-                              <th className="text-xs whitespace-nowrap">
-                                Creada
-                              </th>
-                              <th className="text-xs whitespace-nowrap">
-                                Último msj
-                              </th>
+                              <th className="text-xs whitespace-nowrap">Creada</th>
+                              <th className="text-xs whitespace-nowrap">Último msj</th>
                             </tr>
                           </thead>
                           <tbody>
                             {convsPage.map((c) => (
                               <tr key={c.id} className="align-top hover">
-                                <td className="font-mono text-[11px]">
-                                  {c.id}
-                                </td>
+                                <td className="font-mono text-[11px]">{c.id}</td>
                                 <td>
-                                  <div className="text-sm font-medium">
-                                    {c.contact?.name || "—"}
-                                  </div>
-                                  <div className="text-xs text-slate-500">
-                                    {c.contact?.phone || ""}
-                                  </div>
+                                  <div className="text-sm font-medium">{c.contact?.name || "—"}</div>
+                                  <div className="text-xs text-slate-500">{c.contact?.phone || ""}</div>
                                 </td>
+                                <td className="text-xs sm:text-sm">{getAgentName(c)}</td>
                                 <td className="text-xs sm:text-sm">
-                                  {getAgentName(c)}
-                                </td>
-                                <td className="text-xs sm:text-sm">
-                                  {(Array.isArray(c.labels)
-                                    ? c.labels
-                                    : []
-                                  ).join(", ")}
+                                  {(Array.isArray(c.labels) ? c.labels : []).join(", ")}
                                 </td>
                                 <td className="text-[11px] text-slate-600 whitespace-nowrap">
-                                  {tsToMs(c.createdAt)
-                                    ? new Date(
-                                        tsToMs(c.createdAt)
-                                      ).toLocaleString()
-                                    : "—"}
+                                  {tsToMs(c.createdAt) ? new Date(tsToMs(c.createdAt)).toLocaleString() : "—"}
                                 </td>
                                 <td className="text-[11px] text-slate-600 whitespace-nowrap">
-                                  {tsToMs(c.lastMessageAt)
-                                    ? new Date(
-                                        tsToMs(c.lastMessageAt)
-                                      ).toLocaleString()
-                                    : "—"}
+                                  {tsToMs(c.lastMessageAt) ? new Date(tsToMs(c.lastMessageAt)).toLocaleString() : "—"}
                                 </td>
                               </tr>
                             ))}
@@ -1203,9 +1144,7 @@ export default function AdminPanel() {
                         <button
                           className="px-3 py-2 text-sm bg-white border rounded-lg hover:bg-slate-50 disabled:opacity-50"
                           disabled={pageClamped <= 1}
-                          onClick={() =>
-                            setPage((p) => Math.max(1, p - 1))
-                          }
+                          onClick={() => setPage((p) => Math.max(1, p - 1))}
                         >
                           ← Anterior
                         </button>
@@ -1215,11 +1154,7 @@ export default function AdminPanel() {
                         <button
                           className="px-3 py-2 text-sm bg-white border rounded-lg hover:bg-slate-50 disabled:opacity-50"
                           disabled={pageClamped >= totalPages}
-                          onClick={() =>
-                            setPage((p) =>
-                              Math.min(totalPages, p + 1)
-                            )
-                          }
+                          onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                         >
                           Siguiente →
                         </button>
@@ -1227,6 +1162,26 @@ export default function AdminPanel() {
                     </>
                   )}
                 </section>
+
+                {/* ✅ Conversaciones Hoy: se monta solo cuando estás en dashboard y ya cargó,
+                    así evitás 2 cargas pesadas al entrar */}
+                <div className="p-4 mt-4 border shadow-inner rounded-2xl bg-white/80">
+                  <h3 className="flex items-center gap-2 mb-2 text-sm font-semibold text-slate-800">
+                    <span>📆 Conversaciones de hoy (detalle rápido)</span>
+                    <span className="px-2 py-0.5 text-[10px] rounded-full bg-slate-100 text-slate-500 border border-slate-200">
+                      Embebido
+                    </span>
+                  </h3>
+                  <ConversacionesHoy
+                    collectionName="conversations"
+                    adsConfig={{
+                      phoneIds: ["768483333020913"],
+                      labelsMatch: ["ads", "publicidad", "meta_ads"],
+                      considerUTM: true,
+                    }}
+                    pageLimit={500}
+                  />
+                </div>
               </>
             )}
           </div>
@@ -1241,30 +1196,8 @@ export default function AdminPanel() {
 
         {/* Vista de detalle del vendedor */}
         {tab === "vendorDetail" && selectedVendorUid && (
-          <VendorDetailPanel
-            vendorUid={selectedVendorUid}
-            onBack={() => setTab("dashboard")}
-          />
+          <VendorDetailPanel vendorUid={selectedVendorUid} onBack={() => setTab("dashboard")} />
         )}
-
-        {/* Conversaciones Hoy embebido (no se toca la lógica) */}
-        <div className="p-4 mt-4 border shadow-inner rounded-2xl bg-white/80">
-          <h3 className="flex items-center gap-2 mb-2 text-sm font-semibold text-slate-800">
-            <span>📆 Conversaciones de hoy (detalle rápido)</span>
-            <span className="px-2 py-0.5 text-[10px] rounded-full bg-slate-100 text-slate-500 border border-slate-200">
-              Embebido
-            </span>
-          </h3>
-          <ConversacionesHoy
-            collectionName="conversations"
-            adsConfig={{
-              phoneIds: ["768483333020913"],
-              labelsMatch: ["ads", "publicidad", "meta_ads"],
-              considerUTM: true,
-            }}
-            pageLimit={500}
-          />
-        </div>
       </div>
     </div>
   );

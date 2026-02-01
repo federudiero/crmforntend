@@ -12,10 +12,19 @@ import {
   Timestamp,
   where,
 } from "firebase/firestore";
-import { db } from "../firebase.js"; // 👈 ajustá la ruta a tu proyecto
+import { db } from "../firebase.js";
 import { format } from "date-fns";
 
-function startEndOfDayInLocalTZ(date) {
+/** ✅ Parse seguro YYYY-MM-DD -> Date LOCAL (mediodía para evitar corrimientos en móvil) */
+function parseYMDToLocalDate(ymd) {
+  const [y, m, d] = String(ymd || "").split("-").map(Number);
+  if (!y || !m || !d) return new Date();
+  return new Date(y, m - 1, d, 12, 0, 0, 0);
+}
+
+/** Rango inicio/fin del día en TZ LOCAL */
+function startEndOfDayFromYMD(ymd) {
+  const date = parseYMDToLocalDate(ymd);
   const y = date.getFullYear();
   const m = date.getMonth();
   const d = date.getDate();
@@ -41,7 +50,7 @@ function toCSV(rows) {
               : String(v);
           return `"${s}"`;
         })
-        .join(","),
+        .join(",")
     )
     .join("\n");
   return head + "\n" + body;
@@ -49,11 +58,15 @@ function toCSV(rows) {
 
 export default function ConversacionesHoy({
   collectionName = "conversations",
-  pageLimit = 200, // fetch máximo por día
+  pageLimit = 200,
 }) {
-  const [selectedDate, setSelectedDate] = useState(() => new Date());
+  /** ✅ guardamos como string para evitar corrimientos en móviles */
+  const [selectedYMD, setSelectedYMD] = useState(() =>
+    format(new Date(), "yyyy-MM-dd")
+  );
+
   const [{ start, end }, setRange] = useState(() =>
-    startEndOfDayInLocalTZ(new Date()),
+    startEndOfDayFromYMD(format(new Date(), "yyyy-MM-dd"))
   );
 
   const [loading, setLoading] = useState(true);
@@ -62,16 +75,17 @@ export default function ConversacionesHoy({
   const [modo, setModo] = useState("nuevas"); // "nuevas" | "activas"
   const [search, setSearch] = useState("");
 
-  // 🔸 Paginado cliente fijo en 10 por página
+  // Paginado (10 filas por página)
   const [currentPage, setCurrentPage] = useState(1);
-  const pageSize = 10; // ⬅️ fijo en 10
+  const pageSize = 10;
 
   useEffect(() => {
-    setRange(startEndOfDayInLocalTZ(selectedDate));
-  }, [selectedDate]);
+    setRange(startEndOfDayFromYMD(selectedYMD));
+  }, [selectedYMD]);
 
   useEffect(() => {
     let mounted = true;
+
     (async () => {
       setLoading(true);
       try {
@@ -82,14 +96,15 @@ export default function ConversacionesHoy({
           where("firstInboundAt", ">=", ts(start)),
           where("firstInboundAt", "<=", ts(end)),
           orderBy("firstInboundAt", "desc"),
-          limit(pageLimit),
+          limit(pageLimit)
         );
+
         const qNuevasFallback = query(
           colRef,
           where("createdAt", ">=", ts(start)),
           where("createdAt", "<=", ts(end)),
           orderBy("createdAt", "desc"),
-          limit(pageLimit),
+          limit(pageLimit)
         );
 
         const [snapN1, snapN2] = await Promise.all([
@@ -99,15 +114,19 @@ export default function ConversacionesHoy({
 
         const arrN = [...snapN1.docs, ...snapN2.docs]
           .map((d) => ({ id: d.id, ...d.data() }))
-          .reduce((acc, x) => (acc.some((y) => y.id === x.id) ? acc : [...acc, x]), []);
+          .reduce(
+            (acc, x) => (acc.some((y) => y.id === x.id) ? acc : [...acc, x]),
+            []
+          );
 
         const qActivas = query(
           colRef,
           where("lastInboundAt", ">=", ts(start)),
           where("lastInboundAt", "<=", ts(end)),
           orderBy("lastInboundAt", "desc"),
-          limit(pageLimit),
+          limit(pageLimit)
         );
+
         const snapA = await getDocs(qActivas);
         const arrA = snapA.docs.map((d) => ({ id: d.id, ...d.data() }));
 
@@ -120,6 +139,7 @@ export default function ConversacionesHoy({
         if (mounted) setLoading(false);
       }
     })();
+
     return () => {
       mounted = false;
     };
@@ -128,7 +148,7 @@ export default function ConversacionesHoy({
   // Reset page al cambiar filtros
   useEffect(() => {
     setCurrentPage(1);
-  }, [modo, selectedDate, search]);
+  }, [modo, selectedYMD, search]);
 
   const rows = useMemo(() => {
     const base = modo === "nuevas" ? nuevasHoy : activasHoy;
@@ -136,27 +156,27 @@ export default function ConversacionesHoy({
     const q = search.trim().toLowerCase();
     const afterSearch = q
       ? base.filter((c) => {
-          const fields = [
-            c.contactId,
-            c.lastMessageText,
-            c.assignedToName,
-            c.assignedToEmail,
-          ]
-            .filter(Boolean)
-            .map((x) => String(x).toLowerCase());
-          return fields.some((f) => f.includes(q));
-        })
+        const fields = [
+          c.contactId,
+          c.lastMessageText,
+          c.assignedToName,
+          c.assignedToEmail,
+        ]
+          .filter(Boolean)
+          .map((x) => String(x).toLowerCase());
+        return fields.some((f) => f.includes(q));
+      })
       : base;
 
     const sorted = [...afterSearch].sort((a, b) => {
       const fa =
         modo === "nuevas"
-          ? (a.firstInboundAt?.toMillis?.() || a.createdAt?.toMillis?.() || 0)
-          : (a.lastInboundAt?.toMillis?.() || 0);
+          ? a.firstInboundAt?.toMillis?.() || a.createdAt?.toMillis?.() || 0
+          : a.lastInboundAt?.toMillis?.() || 0;
       const fb =
         modo === "nuevas"
-          ? (b.firstInboundAt?.toMillis?.() || b.createdAt?.toMillis?.() || 0)
-          : (b.lastInboundAt?.toMillis?.() || 0);
+          ? b.firstInboundAt?.toMillis?.() || b.createdAt?.toMillis?.() || 0
+          : b.lastInboundAt?.toMillis?.() || 0;
       return fb - fa;
     });
 
@@ -165,21 +185,18 @@ export default function ConversacionesHoy({
 
   const counters = useMemo(() => {
     const uniques = new Set(rows.map((r) => r.contactId || r.id));
-    return {
-      total: rows.length,
-      unicos: uniques.size,
-    };
+    return { total: rows.length, unicos: uniques.size };
   }, [rows]);
 
   const totalPages = useMemo(
     () => Math.max(1, Math.ceil(rows.length / pageSize)),
-    [rows.length, pageSize],
+    [rows.length]
   );
 
   const pagedRows = useMemo(() => {
     const startIdx = (currentPage - 1) * pageSize;
     return rows.slice(startIdx, startIdx + pageSize);
-  }, [rows, currentPage, pageSize]);
+  }, [rows, currentPage]);
 
   function handleExport() {
     const compact = rows.map((r) => ({
@@ -198,33 +215,42 @@ export default function ConversacionesHoy({
       assignedToEmail: r.assignedToEmail || "",
       lastMessageText: r.lastMessageText || "",
     }));
+
     const csv = toCSV(compact);
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
+
     const a = document.createElement("a");
     const fname =
-      (modo === "nuevas" ? "nuevas_" : "activas_") +
-      format(selectedDate, "yyyy-MM-dd") +
-      ".csv";
+      (modo === "nuevas" ? "nuevas_" : "activas_") + selectedYMD + ".csv";
     a.href = url;
     a.download = fname;
+
+    // ✅ más robusto en mobile: anexar y remover
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }
 
-  const dateStr = format(selectedDate, "yyyy-MM-dd");
+  const dateStr = selectedYMD;
+  const goToPage = (p) =>
+    setCurrentPage(Math.min(Math.max(1, p), totalPages));
 
-  // Helpers paginación
-  const goToPage = (p) => setCurrentPage(Math.min(Math.max(1, p), totalPages));
+  // ✅ paginación responsive: 5 en mobile, 10 en desktop
   const Pagination = () => {
-    // 10 botones numerados visibles
-    const windowSize = 10;
-    const half = Math.floor(windowSize / 2);
+    const windowSize = 5; // mobile default
+    const windowSizeDesktop = 10;
+
+    // simple: usamos CSS para decidir cuántos mostramos
+    // generamos siempre 10 y escondemos parte en mobile.
+    const size = window.innerWidth >= 640 ? windowSizeDesktop : windowSize;
+    const half = Math.floor(size / 2);
 
     let startP = Math.max(1, currentPage - half);
-    let endP = Math.min(totalPages, startP + windowSize - 1);
-    if (endP - startP + 1 < windowSize) {
-      startP = Math.max(1, endP - windowSize + 1);
+    let endP = Math.min(totalPages, startP + size - 1);
+    if (endP - startP + 1 < size) {
+      startP = Math.max(1, endP - size + 1);
     }
 
     const pages = [];
@@ -233,6 +259,7 @@ export default function ConversacionesHoy({
     return (
       <div className="join">
         <button
+          type="button"
           className="join-item btn btn-xs"
           onClick={() => goToPage(currentPage - 1)}
           disabled={currentPage <= 1}
@@ -242,15 +269,24 @@ export default function ConversacionesHoy({
 
         {startP > 1 && (
           <>
-            <button className="join-item btn btn-xs" onClick={() => goToPage(1)}>
+            <button
+              type="button"
+              className="join-item btn btn-xs"
+              onClick={() => goToPage(1)}
+            >
               1
             </button>
-            {startP > 2 && <button className="join-item btn btn-xs btn-ghost">…</button>}
+            {startP > 2 && (
+              <span className="join-item btn btn-xs btn-ghost pointer-events-none">
+                …
+              </span>
+            )}
           </>
         )}
 
         {pages.map((p) => (
           <button
+            type="button"
             key={p}
             className={`join-item btn btn-xs ${p === currentPage ? "btn-primary" : ""}`}
             onClick={() => goToPage(p)}
@@ -261,14 +297,23 @@ export default function ConversacionesHoy({
 
         {endP < totalPages && (
           <>
-            {endP < totalPages - 1 && <button className="join-item btn btn-xs btn-ghost">…</button>}
-            <button className="join-item btn btn-xs" onClick={() => goToPage(totalPages)}>
+            {endP < totalPages - 1 && (
+              <span className="join-item btn btn-xs btn-ghost pointer-events-none">
+                …
+              </span>
+            )}
+            <button
+              type="button"
+              className="join-item btn btn-xs"
+              onClick={() => goToPage(totalPages)}
+            >
               {totalPages}
             </button>
           </>
         )}
 
         <button
+          type="button"
           className="join-item btn btn-xs"
           onClick={() => goToPage(currentPage + 1)}
           disabled={currentPage >= totalPages}
@@ -301,17 +346,15 @@ export default function ConversacionesHoy({
               <span className="font-medium">Vista</span>
               <div className="join">
                 <button
-                  className={`btn btn-sm join-item ${
-                    modo === "nuevas" ? "btn-primary" : "btn-ghost"
-                  }`}
+                  type="button"
+                  className={`btn btn-sm join-item ${modo === "nuevas" ? "btn-primary" : "btn-ghost"}`}
                   onClick={() => setModo("nuevas")}
                 >
                   Nuevas
                 </button>
                 <button
-                  className={`btn btn-sm join-item ${
-                    modo === "activas" ? "btn-primary" : "btn-ghost"
-                  }`}
+                  type="button"
+                  className={`btn btn-sm join-item ${modo === "activas" ? "btn-primary" : "btn-ghost"}`}
                   onClick={() => setModo("activas")}
                 >
                   Activas
@@ -331,8 +374,8 @@ export default function ConversacionesHoy({
             <input
               type="date"
               className="w-full input input-sm input-bordered"
-              value={format(selectedDate, "yyyy-MM-dd")}
-              onChange={(e) => setSelectedDate(new Date(e.target.value))}
+              value={selectedYMD}
+              onChange={(e) => setSelectedYMD(e.target.value)}
             />
             <p className="mt-2 text-xs opacity-70">
               Mostrando resultados de <b>{dateStr}</b>.
@@ -352,15 +395,24 @@ export default function ConversacionesHoy({
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
-              <button className="btn btn-sm btn-outline" onClick={handleExport} title="Exportar CSV">
-                <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+              <button
+                type="button"
+                className="btn btn-sm btn-outline"
+                onClick={handleExport}
+                title="Exportar CSV"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="w-4 h-4"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                >
                   <path d="M12 3a1 1 0 011 1v8.586l2.293-2.293a1 1 0 011.414 1.414l-4.001 4a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L11 12.586V4a1 1 0 011-1z" />
                   <path d="M5 20a2 2 0 01-2-2v-2a1 1 0 112 0v2h14v-2a1 1 0 112 0v2a2 2 0 01-2 2H5z" />
                 </svg>
                 <span className="hidden ml-1 sm:inline">CSV</span>
               </button>
             </div>
-            {/* pageSize fijo en 10: no se muestra selector */}
           </div>
         </div>
       </div>
@@ -369,7 +421,9 @@ export default function ConversacionesHoy({
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="border shadow stats bg-base-100 border-base-300">
           <div className="stat">
-            <div className="stat-title">Total {modo === "nuevas" ? "Nuevas" : "Activas"}</div>
+            <div className="stat-title">
+              Total {modo === "nuevas" ? "Nuevas" : "Activas"}
+            </div>
             <div className="stat-value text-primary">{counters.total}</div>
             <div className="stat-desc">Conversaciones listadas</div>
           </div>
@@ -402,60 +456,123 @@ export default function ConversacionesHoy({
               <tbody>
                 {loading && (
                   <tr>
-                    <td colSpan={7} className="opacity-70">Cargando…</td>
+                    <td colSpan={7} className="opacity-70">
+                      Cargando…
+                    </td>
                   </tr>
                 )}
+
                 {!loading && pagedRows.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="opacity-70">Sin resultados para el día seleccionado.</td>
+                    <td colSpan={7} className="opacity-70">
+                      Sin resultados para el día seleccionado.
+                    </td>
                   </tr>
                 )}
-                {!loading && pagedRows.map((c, i) => {
-                  const firstInboundStr = c.firstInboundAt?.toDate
-                    ? format(c.firstInboundAt.toDate(), "HH:mm:ss")
-                    : "-";
-                  const createdStr = c.createdAt?.toDate
-                    ? format(c.createdAt.toDate(), "HH:mm:ss")
-                    : "-";
-                  const inboundStr = c.lastInboundAt?.toDate
-                    ? format(c.lastInboundAt.toDate(), "HH:mm:ss")
-                    : "-";
-                  return (
-                    <tr key={c.id} className="hover">
-                      <td>{(currentPage - 1) * pageSize + i + 1}</td>
-                      <td className="font-mono">{c.contactId || "-"}</td>
-                      <td>
-                        {c.assignedToName ? (
-                          <span className="badge badge-ghost">{c.assignedToName}</span>
-                        ) : c.assignedToEmail ? (
-                          <span className="badge badge-ghost">{c.assignedToEmail}</span>
-                        ) : ("-")}
-                      </td>
-                      <td>{firstInboundStr}</td>
-                      <td>{createdStr}</td>
-                      <td>{inboundStr}</td>
-                      <td className="max-w-[520px]">
-                        <span className="line-clamp-1">{c.lastMessageText || "-"}</span>
-                      </td>
-                    </tr>
-                  );
-                })}
+
+                {!loading &&
+                  pagedRows.map((c, i) => {
+                    const firstInboundStr = c.firstInboundAt?.toDate
+                      ? format(c.firstInboundAt.toDate(), "HH:mm:ss")
+                      : "-";
+                    const createdStr = c.createdAt?.toDate
+                      ? format(c.createdAt.toDate(), "HH:mm:ss")
+                      : "-";
+                    const inboundStr = c.lastInboundAt?.toDate
+                      ? format(c.lastInboundAt.toDate(), "HH:mm:ss")
+                      : "-";
+
+                    return (
+                      <tr key={c.id} className="hover">
+                        <td>{(currentPage - 1) * pageSize + i + 1}</td>
+                        <td className="font-mono">{c.contactId || "-"}</td>
+                        <td>
+                          {c.assignedToName ? (
+                            <span className="badge badge-ghost">
+                              {c.assignedToName}
+                            </span>
+                          ) : c.assignedToEmail ? (
+                            <span className="badge badge-ghost">
+                              {c.assignedToEmail}
+                            </span>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
+                        <td>{firstInboundStr}</td>
+                        <td>{createdStr}</td>
+                        <td>{inboundStr}</td>
+                        <td className="max-w-[520px]">
+                          <span className="line-clamp-1">
+                            {c.lastMessageText || "-"}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
               </tbody>
             </table>
           </div>
 
-          {/* Footer tabla con paginación */}
-          <div className="flex flex-col gap-3 p-3 text-xs border-t border-base-300 sm:flex-row sm:items-center sm:justify-between">
-            <span className="opacity-70">
-              Mostrando <b>{pagedRows.length}</b> de <b>{rows.length}</b> filas • Página <b>{currentPage}</b> de <b>{totalPages}</b> • {modo === "nuevas" ? "Nuevas" : "Activas"} del <b>{dateStr}</b>
-            </span>
-            <div className="flex items-center gap-3">
-              <button className="btn btn-xs" onClick={() => goToPage(1)} disabled={currentPage === 1}>Primero</button>
-              <button className="btn btn-xs" onClick={() => goToPage(currentPage - 1)} disabled={currentPage === 1}>Anterior</button>
-              <Pagination />
-              <button className="btn btn-xs" onClick={() => goToPage(currentPage + 1)} disabled={currentPage === totalPages}>Siguiente</button>
-              <button className="btn btn-xs" onClick={() => goToPage(totalPages)} disabled={currentPage === totalPages}>Último</button>
-              <button className="btn btn-xs btn-outline" onClick={handleExport}>Exportar CSV</button>
+          {/* ✅ FOOTER RESPONSIVE */}
+          <div className="p-3 text-xs border-t border-base-300">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <span className="opacity-70">
+                Mostrando <b>{pagedRows.length}</b> de <b>{rows.length}</b> •
+                Página <b>{currentPage}</b> de <b>{totalPages}</b> •{" "}
+                {modo === "nuevas" ? "Nuevas" : "Activas"} del <b>{dateStr}</b>
+              </span>
+
+              <div className="flex flex-wrap items-center gap-2 justify-start sm:justify-end">
+                <button
+                  type="button"
+                  className="btn btn-xs"
+                  onClick={() => goToPage(1)}
+                  disabled={currentPage === 1}
+                >
+                  Primero
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-xs"
+                  onClick={() => goToPage(currentPage - 1)}
+                  disabled={currentPage === 1}
+                >
+                  Anterior
+                </button>
+
+                <button
+                  type="button"
+                  className="btn btn-xs"
+                  onClick={() => goToPage(currentPage + 1)}
+                  disabled={currentPage === totalPages}
+                >
+                  Siguiente
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-xs"
+                  onClick={() => goToPage(totalPages)}
+                  disabled={currentPage === totalPages}
+                >
+                  Último
+                </button>
+
+                <button
+                  type="button"
+                  className="btn btn-xs btn-outline"
+                  onClick={handleExport}
+                >
+                  Exportar CSV
+                </button>
+              </div>
+            </div>
+
+            {/* Números en fila aparte con scroll horizontal si hace falta */}
+            <div className="mt-3 overflow-x-auto">
+              <div className="inline-flex min-w-max">
+                <Pagination />
+              </div>
             </div>
           </div>
         </div>
