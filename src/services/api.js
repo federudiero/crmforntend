@@ -1,9 +1,7 @@
-// src/services/api.js
-import { auth } from "../firebase.js"; // ajustá la ruta si tu firebase está en otro lado
+import { auth } from "../firebase.js";
 
 const BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/$/, "");
 
-// Helper: arma headers con Bearer si hay usuario logueado
 async function buildAuthHeaders(extra = {}) {
   const headers = { "Content-Type": "application/json", ...extra };
 
@@ -15,38 +13,30 @@ async function buildAuthHeaders(extra = {}) {
   return headers;
 }
 
-/**
- * Enviar mensaje flexible:
- *  - text: string
- *  - image: { link, caption? }  ó { id }
- *  - audio: { link }            ó { id }
- *  - document: { link, caption?, filename? } ó { id }
- *  - template: { name, language:{code}, components:[...] }
- */
 export async function sendMessage({
   to,
   text,
   image,
   audio,
+  audioMeta,
   document,
   template,
   conversationId,
   replyTo,
   sellerName,
-  fromWaPhoneId, // opcional
-  phoneId,       // opcional
+  fromWaPhoneId,
+  phoneId,
 }) {
   const payload = { to, conversationId };
 
   if (text) payload.text = text;
   if (image) payload.image = image;
   if (audio) payload.audio = audio;
+  if (audioMeta) payload.audioMeta = audioMeta;
   if (document) payload.document = document;
   if (template) payload.template = template;
   if (replyTo) payload.replyTo = replyTo;
   if (sellerName) payload.sellerName = sellerName;
-
-  // opcional: si querés forzar un emisor específico
   if (fromWaPhoneId) payload.fromWaPhoneId = fromWaPhoneId;
   if (phoneId) payload.phoneId = phoneId;
 
@@ -72,10 +62,6 @@ export async function sendMessage({
   return data;
 }
 
-/**
- * (Opcional) Si tu remarketing usa /api/send-template:
- * Mantengo el nombre por claridad.
- */
 export async function sendTemplate({
   phone,
   templateName,
@@ -100,6 +86,39 @@ export async function sendTemplate({
   };
 
   const r = await fetch(`${BASE}/api/send-template`, {
+    method: "POST",
+    headers: await buildAuthHeaders(),
+    body: JSON.stringify(payload),
+  });
+
+  const raw = await r.text();
+  let data = null;
+  try {
+    data = JSON.parse(raw);
+  } catch (e) {
+    console.error(e);
+  }
+
+  if (!r.ok) {
+    const msg = data?.error?.message || data?.error || raw || "Error desconocido";
+    throw new Error(`HTTP ${r.status}: ${msg}`);
+  }
+
+  return data;
+}
+
+export async function checkTemplateEligibility({
+  phone,
+  templateName,
+  languageCode = "es_AR",
+}) {
+  const payload = {
+    phone,
+    templateName,
+    languageCode,
+  };
+
+  const r = await fetch(`${BASE}/api/check-template-eligibility`, {
     method: "POST",
     headers: await buildAuthHeaders(),
     body: JSON.stringify(payload),

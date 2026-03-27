@@ -20,12 +20,26 @@ export default function ChatMessagesPane({
     setImagePreviewUrl,
 }) {
     return (
-        <main ref={viewportRef} className="flex-1 px-3 py-3 overflow-x-hidden overflow-y-auto md:px-4 md:py-4">
+        <main
+            ref={viewportRef}
+            className="
+        flex-1
+        px-3 pt-3
+        pb-[calc(6rem+env(safe-area-inset-bottom))]
+        overflow-x-hidden overflow-y-auto
+        md:px-4 md:pt-4
+        md:pb-[calc(7rem+env(safe-area-inset-bottom))]
+        bg-[var(--root-bg)]
+        text-base-content
+        overscroll-contain
+      "
+        >
             {hasMoreMessages && msgs.length > 0 && (
                 <div className="flex justify-center mb-4">
                     <button
                         onClick={loadMoreMessages}
-                        className="px-4 py-2 text-xs md:text-sm font-medium text-[#2E7D32] bg-[#E8F5E9] border border-[#2E7D32]/20 rounded-full hover:bg-[#CDEBD6] transition-colors duration-200"
+                        className="btn btn-sm md:btn-md btn-outline rounded-full"
+                        type="button"
                     >
                         Cargar más antiguos
                     </button>
@@ -33,7 +47,7 @@ export default function ChatMessagesPane({
             )}
 
             {msgs.length === 0 && (
-                <div className="mx-auto rounded-xl border border-[#CDEBD6] bg-[#EAF7EE] p-4 text-center text-sm">
+                <div className="mx-auto p-4 text-center text-sm border rounded-xl border-base-300 bg-base-200">
                     Sin mensajes todavía.
                 </div>
             )}

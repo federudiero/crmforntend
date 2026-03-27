@@ -1,42 +1,45 @@
 <!doctype html>
-<html lang="es" data-theme="crm">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<html lang="es" data-theme="crm-dark">
 
-    <!-- Colores / meta -->
-    <meta name="theme-color" content="#1f2937" />
-    <meta name="description" content="CRM Hogarcril - Sistema de gestión de conversaciones" />
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-    <!-- Manifest PWA -->
-    <link rel="manifest" href="/manifest.webmanifest" />
+  <!-- Colores / meta -->
+  <meta name="theme-color" content="#1f2937" />
+  <meta name="description" content="CRM Hogarcril - Sistema de gestión de conversaciones" />
 
-    <!-- Iconos -->
-    <link rel="icon" type="image/jpeg" href="/icono.jpg" />
-    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
-    <link rel="shortcut icon" type="image/jpeg" href="/icono.jpg" />
+  <!-- Manifest PWA -->
+  <link rel="manifest" href="/manifest.webmanifest" />
 
-    <!-- iOS standalone (opcional pero recomendado) -->
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <!-- Iconos -->
+  <link rel="icon" type="image/jpeg" href="/icono.jpg" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <link rel="shortcut icon" type="image/jpeg" href="/icono.jpg" />
 
-    <title>CRM Hogarcril</title>
-  </head>
-  <body>
-    <div id="root"></div>
+  <!-- iOS standalone (opcional pero recomendado) -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 
-    <!-- Tu app (no toco tu lógica) -->
-    <script type="module" src="/src/main.jsx"></script>
+  <title>CRM Hogarcril</title>
+</head>
 
-    <!-- Registro del Service Worker -->
-    <script>
-      if ("serviceWorker" in navigator) {
-        window.addEventListener("load", () => {
-          navigator.serviceWorker
-            .register("/sw.js", { scope: "/" })
-            .catch((err) => console.error("SW registration failed:", err));
-        });
-      }
-    </script>
-  </body>
+<body>
+  <div id="root"></div>
+
+  <!-- Tu app (no toco tu lógica) -->
+  <script type="module" src="/src/main.jsx"></script>
+
+  <!-- Registro del Service Worker -->
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker
+          .register("/sw.js", { scope: "/" })
+          .catch((err) => console.error("SW registration failed:", err));
+      });
+    }
+  </script>
+</body>
+
 </html>

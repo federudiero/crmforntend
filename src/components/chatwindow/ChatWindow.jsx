@@ -1,5 +1,5 @@
 // src/chatwindow/ChatWindow.jsx
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect,  useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { arrayRemove, arrayUnion, doc, updateDoc, deleteDoc } from "firebase/firestore";
 
@@ -91,14 +91,14 @@ export default function ChatWindow({ conversationId, onBack }) {
     const [messageLimit, setMessageLimit] = useState(50);
 
     // ---- data hooks ----
-    const { convMeta, convSlugs, canRead, canWrite, isAdmin } = useConversationMeta({
+    const { convMeta, convSlugs, canRead, canWrite } = useConversationMeta({
         conversationId,
         user,
     });
 
     const contact = useContact(conversationId);
 
-    const { allLabels, tagsData, getLabel } = useLabels();
+    const {  tagsData, getLabel } = useLabels();
     const { msgs, hasMoreMessages } = useConversationMessages({
         conversationId,
         canRead,
@@ -126,8 +126,6 @@ export default function ChatWindow({ conversationId, onBack }) {
         setShowTags(false);
         setShowProfile(false);
         setMessageLimit(50);
-
-        // ❌ NO: requestAnimationFrame(() => viewportRef.current?.scrollTo({ top: 0 }));
     }, [conversationId]);
 
     // paginación: antes de pedir más (mensajes viejos), guardo estado para mantener la vista
@@ -397,10 +395,16 @@ export default function ChatWindow({ conversationId, onBack }) {
                 template: templatePayload,
             });
 
-            logWaSendOutcome("manual-24h", tplRes, { template: templatePayload }, { conversationId, sellerName });
+            logWaSendOutcome(
+                "manual-24h",
+                tplRes,
+                { template: templatePayload },
+                { conversationId, sellerName }
+            );
 
             const code = tplRes?.results?.[0]?.error?.error?.code || tplRes?.results?.[0]?.error?.code;
-            if (tplRes?.ok === false) alert(`No se pudo enviar la plantilla.\nCódigo: ${code || "desconocido"}`);
+            if (tplRes?.ok === false)
+                alert(`No se pudo enviar la plantilla.\nCódigo: ${code || "desconocido"}`);
 
             const serverConvId = tplRes?.results?.[0]?.to;
             if (serverConvId && serverConvId !== conversationId) {
@@ -476,7 +480,12 @@ export default function ChatWindow({ conversationId, onBack }) {
                         template: templatePayload,
                     });
 
-                    logWaSendOutcome("auto-24h", tplRes, { template: templatePayload }, { conversationId, outside, sellerName });
+                    logWaSendOutcome(
+                        "auto-24h",
+                        tplRes,
+                        { template: templatePayload },
+                        { conversationId, outside, sellerName }
+                    );
 
                     const serverConvId = tplRes?.results?.[0]?.to;
                     if (serverConvId && serverConvId !== conversationId) {
@@ -493,7 +502,9 @@ export default function ChatWindow({ conversationId, onBack }) {
                         conversationId,
                         sellerName,
                         text: body,
-                        ...(replyTo ? { replyTo: { id: replyTo.id, type: replyTo.type, text: replyTo.textPreview } } : {}),
+                        ...(replyTo
+                            ? { replyTo: { id: replyTo.id, type: replyTo.type, text: replyTo.textPreview } }
+                            : {}),
                     });
 
                     const serverConvId = textRes?.results?.[0]?.to;
@@ -517,7 +528,9 @@ export default function ChatWindow({ conversationId, onBack }) {
                     conversationId,
                     sellerName,
                     image: { link: url },
-                    ...(replyTo ? { replyTo: { id: replyTo.id, type: replyTo.type, text: replyTo.textPreview } } : {}),
+                    ...(replyTo
+                        ? { replyTo: { id: replyTo.id, type: replyTo.type, text: replyTo.textPreview } }
+                        : {}),
                 });
                 if (res?.ok === false) alert("No se pudo enviar la imagen.");
             }
@@ -526,15 +539,26 @@ export default function ChatWindow({ conversationId, onBack }) {
             if (hasAudio && audioToSend) {
                 setSending(true);
                 const dest = `uploads/${conversationId}/${Date.now()}_${audioToSend.name}`;
-                const { url } = await uploadFile(audioToSend, dest, {
-                    allowed: ["audio/mpeg", "audio/ogg", "audio/wav", "audio/mp4", "audio/aac", "audio/webm", "audio/webm;codecs=opus"],
-                });
+              const { url } = await uploadFile(audioToSend, dest, {
+  allowed: [
+    "audio/mpeg",
+    "audio/ogg",
+    "audio/ogg;codecs=opus",
+    "audio/mp4",
+    "audio/webm",
+    "audio/webm;codecs=opus",
+    "audio/wav",
+    "audio/aac",
+  ],
+});
                 const res = await sendMessage({
                     to: String(conversationId),
                     conversationId,
                     sellerName,
                     audio: { link: url },
-                    ...(replyTo ? { replyTo: { id: replyTo.id, type: replyTo.type, text: replyTo.textPreview } } : {}),
+                    ...(replyTo
+                        ? { replyTo: { id: replyTo.id, type: replyTo.type, text: replyTo.textPreview } }
+                        : {}),
                 });
                 if (res?.ok === false) alert("No se pudo enviar el audio.");
             }
@@ -565,7 +589,9 @@ export default function ChatWindow({ conversationId, onBack }) {
                     conversationId,
                     sellerName,
                     document: { link: url, filename: docToSend?.name || undefined },
-                    ...(replyTo ? { replyTo: { id: replyTo.id, type: replyTo.type, text: replyTo.textPreview } } : {}),
+                    ...(replyTo
+                        ? { replyTo: { id: replyTo.id, type: replyTo.type, text: replyTo.textPreview } }
+                        : {}),
                 });
                 if (res?.ok === false) alert("No se pudo enviar el documento.");
             }
@@ -619,8 +645,10 @@ export default function ChatWindow({ conversationId, onBack }) {
 
     if (!canRead) {
         return (
-            <div className="flex items-center justify-center h-full text-sm text-gray-600">
-                No tenés acceso a este chat. Asignate desde la lista.
+            <div className="flex items-center justify-center h-full p-4 text-sm bg-base-200 text-base-content">
+                <div className="p-4 border shadow-sm bg-base-100 border-base-300 rounded-box">
+                    No tenés acceso a este chat. Asignate desde la lista.
+                </div>
             </div>
         );
     }
@@ -640,8 +668,8 @@ export default function ChatWindow({ conversationId, onBack }) {
     };
 
     return (
-        <div className="flex items-stretch w-full h-full overflow-hidden">
-            <div className="flex h-full min-h-0 w-full overflow-hidden flex-col text-black bg-[#F6FBF7]">
+        <div className="flex items-stretch w-full h-full overflow-hidden bg-[var(--root-bg)] text-base-content">
+            <div className="flex flex-col w-full h-full min-h-0 overflow-hidden bg-[var(--root-bg)] text-base-content">
                 <ChatHeader
                     conversationId={conversationId}
                     onBack={onBack}
@@ -662,7 +690,7 @@ export default function ChatWindow({ conversationId, onBack }) {
                     setText={setText}
                 />
 
-                <section className="flex flex-col flex-1 min-h-0">
+                <section className="flex flex-col flex-1 min-h-0 bg-[var(--root-bg)] text-base-content">
                     <ChatTabs tab={tab} setTab={setTab} />
 
                     {tab === "chat" ? (
@@ -685,7 +713,7 @@ export default function ChatWindow({ conversationId, onBack }) {
                             setImagePreviewUrl={setImagePreviewUrl}
                         />
                     ) : (
-                        <main className="flex-1 px-3 py-3 overflow-y-auto md:px-4 md:py-4">
+                        <main className="flex-1 px-3 py-3 overflow-y-auto md:px-4 md:py-4 bg-[var(--root-bg)]">
                             <ChatDestacadosPanel chatId={conversationId} />
                         </main>
                     )}
@@ -742,12 +770,7 @@ export default function ChatWindow({ conversationId, onBack }) {
 
             <ImagePreviewModal url={imagePreviewUrl} onClose={() => setImagePreviewUrl(null)} />
 
-            <TagsModal
-                open={showTags}
-                onClose={() => setShowTags(false)}
-                tagsData={tagsData}
-                onPick={toggleLabel}
-            />
+            <TagsModal open={showTags} onClose={() => setShowTags(false)} tagsData={tagsData} onPick={toggleLabel} />
 
             <CombosModal
                 open={showCombos}
@@ -778,10 +801,18 @@ export default function ChatWindow({ conversationId, onBack }) {
                             conversationId,
                             sellerName,
                             image: { link: img.url },
-                            ...(replyTo ? { replyTo: { id: replyTo.id, type: replyTo.type, text: replyTo.textPreview } } : {}),
+                            ...(replyTo
+                                ? { replyTo: { id: replyTo.id, type: replyTo.type, text: replyTo.textPreview } }
+                                : {}),
                         });
 
-                        logWaSendOutcome("saved-image", res, { image: { link: img.url } }, { conversationId, sellerName });
+                        logWaSendOutcome(
+                            "saved-image",
+                            res,
+                            { image: { link: img.url } },
+                            { conversationId, sellerName }
+                        );
+
                         if (res?.ok === false) alert("No se pudo enviar la imagen guardada.");
                     } finally {
                         setSending(false);

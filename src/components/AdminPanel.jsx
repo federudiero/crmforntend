@@ -1,5 +1,5 @@
 // src/components/AdminPanel.jsx
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { auth, db } from "../firebase";
 import {
   addDoc,
@@ -9,11 +9,13 @@ import {
   onSnapshot,
   Timestamp,
   serverTimestamp,
-
-  // ✅ NUEVO: batch contacts (evita 1 getDoc por conversación)
   query,
   where,
   documentId,
+  orderBy,
+  limit,
+  startAfter,
+  getCountFromServer,
 } from "firebase/firestore";
 
 import AdminVendors from "./AdminVendors.jsx";
@@ -109,32 +111,45 @@ function downloadCSV(filename, csv) {
 }
 
 /* ========================= Presentational Cards ========================= */
-function MiniStatCard({ title, value, from = "#eef2ff", to = "#e0e7ff", text = "#1e293b" }) {
+function MiniStatCard({ title, value, tone = "primary" }) {
+  const toneMap = {
+    primary: "var(--color-primary)",
+    secondary: "var(--color-secondary)",
+    accent: "var(--color-accent)",
+    success: "var(--color-success)",
+    warning: "var(--color-warning)",
+    error: "var(--color-error)",
+    neutral: "var(--color-neutral)",
+  };
+
   return (
-    <div
-      className="p-4 border shadow-lg rounded-2xl bg-white/80 backdrop-blur-sm flex flex-col justify-between hover:translate-y-0.5 transition-transform"
-      style={{
-        backgroundImage: `linear-gradient(145deg, ${from}, ${to})`,
-        borderColor: "rgba(148,163,184,.35)",
-      }}
-    >
-      <div className="text-[11px] font-semibold tracking-[0.08em] uppercase text-slate-500">
+    <div className="p-4 border border-base-300 shadow-lg rounded-2xl bg-base-100">
+      <div className="text-[11px] font-semibold tracking-[0.08em] uppercase text-base-content/60">
         {title}
       </div>
-      <div className="mt-3 text-3xl font-extrabold leading-none" style={{ color: text }}>
+      <div
+        className="mt-3 text-3xl font-extrabold leading-none tabular-nums"
+        style={{ color: toneMap[tone] || toneMap.primary }}
+      >
         {value}
       </div>
     </div>
   );
 }
 
-function ListStatCard({ title, data, accent = "#3b82f6", exportBtn, formatter = (k) => k }) {
+function ListStatCard({
+  title,
+  data,
+  accent = "var(--color-primary)",
+  exportBtn,
+  formatter = (k) => k,
+}) {
   return (
-    <section className="p-6 space-y-4 border shadow-lg rounded-2xl bg-white/95 backdrop-blur-md">
+    <section className="p-6 space-y-4 border border-base-300 shadow-lg rounded-2xl bg-base-100">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h3 className="text-lg font-semibold text-slate-900">{title}</h3>
-          <p className="mt-1 text-xs text-slate-500">
+          <h3 className="text-lg font-semibold text-base-content">{title}</h3>
+          <p className="mt-1 text-xs text-base-content/60">
             Vista resumida. Ideal para detectar patrones rápidos.
           </p>
         </div>
@@ -142,7 +157,7 @@ function ListStatCard({ title, data, accent = "#3b82f6", exportBtn, formatter = 
       </div>
 
       {data.length === 0 ? (
-        <div className="p-6 text-sm text-center border border-dashed rounded-xl bg-slate-50/80 text-slate-500">
+        <div className="p-6 text-sm text-center border border-dashed border-base-300 rounded-xl bg-base-200 text-base-content/60">
           Sin datos en el período seleccionado.
         </div>
       ) : (
@@ -151,8 +166,7 @@ function ListStatCard({ title, data, accent = "#3b82f6", exportBtn, formatter = 
             {data.map((d, i) => (
               <div
                 key={i}
-                className="p-4 transition-colors border shadow-sm rounded-xl bg-white/90 hover:bg-slate-50/90 group"
-                style={{ borderColor: "rgba(226,232,240,.9)" }}
+                className="p-4 transition-colors border border-base-300 shadow-sm rounded-xl bg-base-100 hover:bg-base-200"
                 title={`${formatter(d.k)}: ${d.v}`}
               >
                 <div
@@ -161,7 +175,7 @@ function ListStatCard({ title, data, accent = "#3b82f6", exportBtn, formatter = 
                 >
                   {d.v}
                 </div>
-                <div className="text-xs font-medium tracking-wide uppercase text-slate-400">
+                <div className="text-xs font-medium tracking-wide uppercase text-base-content/60">
                   {formatter(d.k)}
                 </div>
               </div>
@@ -185,7 +199,6 @@ function calcOnline(userDoc) {
   return !!(flag && fresh);
 }
 
-/* =============================================================== */
 function cleanAgentLabel(s) {
   const val = String(s || "").trim();
   if (!val) return "";
@@ -205,6 +218,21 @@ function chunk(array, size = 10) {
   const out = [];
   for (let i = 0; i < array.length; i += size) out.push(array.slice(i, i + size));
   return out;
+}
+
+function uniqMergeById(prev, next) {
+  const map = new Map();
+  for (const x of prev || []) map.set(x.id, x);
+  for (const x of next || []) map.set(x.id, x);
+  return Array.from(map.values());
+}
+
+function yieldToUI() {
+  return new Promise((res) => {
+    if (typeof requestIdleCallback !== "undefined")
+      requestIdleCallback(() => res(), { timeout: 250 });
+    else setTimeout(res, 0);
+  });
 }
 
 /* =============================================================== */
@@ -236,16 +264,13 @@ function AdminAssignTask({ vendors }) {
     const [y, m, d] = ymd.split("-").map(Number);
     let H = 9,
       M = 0;
-    if (hm && /^\d{2}:\d{2}$/.test(hm)) {
-      [H, M] = hm.split(":").map(Number);
-    }
+    if (hm && /^\d{2}:\d{2}$/.test(hm)) [H, M] = hm.split(":").map(Number);
     const js = new Date(y, (m || 1) - 1, d || 1, H || 0, M || 0, 0);
     return Timestamp.fromDate(js);
   }
 
   async function handleCreate(e) {
     e?.preventDefault?.();
-
     if (!form.userId) return alert("Elegí un agente.");
     if (!form.titulo.trim()) return alert("Escribí un título.");
 
@@ -274,30 +299,29 @@ function AdminAssignTask({ vendors }) {
   }
 
   return (
-    <section className="p-6 mb-6 border shadow-lg rounded-2xl bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-slate-100">
+    <section className="p-6 mb-6 border shadow-lg rounded-2xl bg-base-100 border-base-300">
       <div className="flex items-start justify-between gap-3 mb-4">
         <div>
-          <h3 className="flex items-center gap-2 mb-1 text-lg font-semibold">
-            <span className="inline-flex items-center justify-center text-xs rounded-full w-7 h-7 bg-indigo-500/80">
+          <h3 className="flex items-center gap-2 mb-1 text-lg font-semibold text-base-content">
+            <span
+              className="inline-flex items-center justify-center text-xs rounded-full w-7 h-7"
+              style={{ background: "var(--color-primary)", color: "var(--color-primary-content)" }}
+            >
               🗓️
             </span>
             Asignar tarea a un agente
           </h3>
-          <p className="text-xs text-slate-300/90">
+          <p className="text-xs text-base-content/60">
             Las tareas se muestran automáticamente en la Agenda del vendedor correspondiente.
           </p>
         </div>
-        <span className="hidden px-2 py-1 text-[10px] font-semibold tracking-wide uppercase rounded-full bg-slate-800/80 text-slate-300 md:inline-flex">
-          Agenda interna
-        </span>
+
+        <span className="hidden badge badge-outline md:inline-flex">Agenda interna</span>
       </div>
 
-      <form
-        onSubmit={handleCreate}
-        className="grid gap-3 p-3 md:grid-cols-12 bg-slate-900/30 rounded-2xl"
-      >
+      <form onSubmit={handleCreate} className="grid gap-3 p-3 md:grid-cols-12 bg-base-200 rounded-2xl">
         <select
-          className="p-2 text-sm border rounded-xl md:col-span-3 bg-slate-900/60 border-slate-700 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="select select-bordered bg-base-100 text-base-content md:col-span-3"
           value={form.userId}
           onChange={(e) => setForm((f) => ({ ...f, userId: e.target.value }))}
           required
@@ -311,7 +335,7 @@ function AdminAssignTask({ vendors }) {
         </select>
 
         <input
-          className="p-2 text-sm border rounded-xl md:col-span-3 bg-slate-900/60 border-slate-700 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="input input-bordered bg-base-100 text-base-content placeholder:text-base-content/50 md:col-span-3"
           placeholder="Título de la tarea"
           value={form.titulo}
           onChange={(e) => setForm((f) => ({ ...f, titulo: e.target.value }))}
@@ -320,33 +344,30 @@ function AdminAssignTask({ vendors }) {
 
         <input
           type="date"
-          className="p-2 text-sm border rounded-xl md:col-span-2 bg-slate-900/60 border-slate-700 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="input input-bordered bg-base-100 text-base-content md:col-span-2"
           value={form.fecha}
           onChange={(e) => setForm((f) => ({ ...f, fecha: e.target.value }))}
           required
         />
         <input
           type="time"
-          className="p-2 text-sm border rounded-xl md:col-span-2 bg-slate-900/60 border-slate-700 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="input input-bordered bg-base-100 text-base-content md:col-span-2"
           value={form.hora}
           onChange={(e) => setForm((f) => ({ ...f, hora: e.target.value }))}
         />
 
         <input
-          className="p-2 text-sm border rounded-xl md:col-span-12 bg-slate-900/60 border-slate-700 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="input input-bordered bg-base-100 text-base-content placeholder:text-base-content/50 md:col-span-12"
           placeholder="Nota (opcional)"
           value={form.nota}
           onChange={(e) => setForm((f) => ({ ...f, nota: e.target.value }))}
         />
 
         <div className="flex items-center justify-between gap-2 md:col-span-12">
-          <button
-            disabled={saving}
-            className="px-4 py-2 text-sm font-semibold text-white shadow-lg rounded-xl bg-gradient-to-r from-indigo-500 to-blue-500 shadow-indigo-500/25 hover:from-indigo-400 hover:to-blue-400 disabled:opacity-70"
-          >
+          <button disabled={saving} className="btn btn-primary">
             {saving ? "Creando…" : "Crear tarea"}
           </button>
-          <span className="text-[11px] text-slate-400">
+          <span className="text-[11px] text-base-content/60">
             Tip: usá fechas futuras para recordatorios programados.
           </span>
         </div>
@@ -363,12 +384,72 @@ export default function AdminPanel() {
 
   // Estado
   const [loading, setLoading] = useState(false);
+  const [loadingFull, setLoadingFull] = useState(false);
+  const [loadedAll, setLoadedAll] = useState(false);
+  const [rangeCount, setRangeCount] = useState(null);
+
   const [convs, setConvs] = useState([]);
+  const deferredConvs = useDeferredValue(convs);
+
   const [vendors, setVendors] = useState([]);
   const [usersByUid, setUsersByUid] = useState({});
 
-  // ✅ mapa de contacts por id (evita N getDoc)
+  // Contacts (cache incremental)
+  const [contactsById, setContactsById] = useState({});
   const contactsByIdRef = useRef({});
+  useEffect(() => {
+    contactsByIdRef.current = contactsById;
+  }, [contactsById]);
+
+  // Cache de conversaciones por rango (para volver atrás instantáneo)
+  const convCacheRef = useRef(new Map());
+
+  /* ============================================================
+     ✅ NUEVO: Métrica seleccionable para que el dashboard coincida
+     con ConversacionesHoy:
+       - lastInboundAt (Activas)
+       - firstInboundAt (Nuevas)
+       - lastMessageAt (Actividad total in/out)
+     ============================================================ */
+
+  // 🔁 DEFAULT PARA COINCIDIR CON "Activas" de ConversacionesHoy:
+  const [timeField, setTimeField] = useState("lastInboundAt");
+  // Si querés mantener el default anterior, usá:
+  // const [timeField, setTimeField] = useState("lastMessageAt");
+
+  const CONV_TIME_FIELD = timeField;
+
+  // Modo por campo (Timestamp vs Number) — evita “clavarse” cuando cambiás de métrica
+  const timeModeByFieldRef = useRef({});
+  const getFieldMode = (field) => timeModeByFieldRef.current?.[field] || "timestamp";
+  const setFieldMode = (field, mode) => {
+    timeModeByFieldRef.current[field] = mode;
+  };
+
+  const timeFieldMeta = useMemo(() => {
+    if (CONV_TIME_FIELD === "lastMessageAt") {
+      return {
+        label: "Actividad (in/out)",
+        shortCol: "Último msj",
+        hint: "Cuenta actividad total (cliente + vendedor). Campo: lastMessageAt",
+      };
+    }
+    if (CONV_TIME_FIELD === "lastInboundAt") {
+      return {
+        label: "Inbound (cliente)",
+        shortCol: "Último inbound",
+        hint: "Cuenta solo cuando el cliente escribió. Campo: lastInboundAt",
+      };
+    }
+    if (CONV_TIME_FIELD === "firstInboundAt") {
+      return {
+        label: "Nuevas (primer inbound)",
+        shortCol: "Primer inbound",
+        hint: "Cuenta nuevas por primer mensaje del cliente. Campo: firstInboundAt",
+      };
+    }
+    return { label: CONV_TIME_FIELD, shortCol: "Tiempo", hint: `Campo: ${CONV_TIME_FIELD}` };
+  }, [CONV_TIME_FIELD]);
 
   // Filtros globales (sin agente)
   const [mode, setMode] = useState("7"); // soporta "today"
@@ -381,31 +462,6 @@ export default function AdminPanel() {
   // Paginado de tabla global
   const [page, setPage] = useState(1);
   const pageSize = 10;
-
-  // Zonas dinámicas (desde vendors activos)
-  const zonas = useMemo(() => {
-    const set = new Set(
-      vendors
-        .filter((v) => v.active)
-        .map((v) => (v.zone || "Sin zona").trim())
-        .filter(Boolean)
-    );
-    return ["(todas)", ...Array.from(set).sort()];
-  }, [vendors]);
-
-  // ✅ Suscripción users (presencia): UNA sola vez
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, "users"), (snap) => {
-      const map = {};
-      snap.forEach((d) => (map[d.id] = d.data()));
-      setUsersByUid(map);
-    });
-    return () => {
-      try {
-        unsub && unsub();
-      } catch { }
-    };
-  }, []);
 
   // ✅ Cargar vendors una vez (para zonas + resumen)
   useEffect(() => {
@@ -424,63 +480,53 @@ export default function AdminPanel() {
     };
   }, []);
 
-  // ✅ Cargar conversaciones SOLO cuando estás en dashboard (y con contacts por batch)
+  // ✅ Presencia users: SUSCRIBIR SOLO a UIDs de vendedores (en chunks de 10)
   useEffect(() => {
-    if (tab !== "dashboard") return;
+    const uids = Array.from(
+      new Set(
+        (vendors || [])
+          .map((v) => v.ownerUid || v.userUid || v.uid || v.id)
+          .filter(Boolean)
+      )
+    );
 
-    let cancelled = false;
+    if (!uids.length) return;
 
-    (async () => {
-      setLoading(true);
-      try {
-        // 1) Conversaciones (1 request)
-        const cs = await getDocs(collection(db, "conversations"));
-        if (cancelled) return;
-
-        const raw = cs.docs.map((d) => ({ id: d.id, ...d.data() }));
-
-        // 2) Contacts en batches de 10 (en vez de getDoc por conv)
-        const ids = raw.map((c) => c.id).filter(Boolean);
-
-        // ⚠️ Guardrail para no spamear si tenés MUCHÍSIMAS convs
-        // (si querés, subilo; esto evita volver a resource-exhausted)
-        const MAX_CONTACTS_PREFETCH = 500; // ~50 requests (500/10)
-        const idsToFetch = ids.slice(0, MAX_CONTACTS_PREFETCH);
-
-        const contactsMap = { ...(contactsByIdRef.current || {}) };
-
-        // fetch solo los que no estén ya cacheados
-        const missing = idsToFetch.filter((id) => !contactsMap[id]);
-
-        for (const part of chunk(missing, 10)) {
-          if (cancelled) return;
-          const qs = query(collection(db, "contacts"), where(documentId(), "in", part));
-          const snap = await getDocs(qs);
-          snap.forEach((cd) => {
-            contactsMap[cd.id] = cd.data();
+    const unsubs = [];
+    for (const part of chunk(uids, 10)) {
+      const qs = query(collection(db, "users"), where(documentId(), "in", part));
+      const unsub = onSnapshot(
+        qs,
+        (snap) => {
+          setUsersByUid((prev) => {
+            const next = { ...prev };
+            snap.forEach((d) => (next[d.id] = d.data()));
+            return next;
           });
-        }
-
-        contactsByIdRef.current = contactsMap;
-
-        // 3) Merge (misma estructura que antes: conv + contact)
-        const merged = raw.map((c) => ({
-          ...c,
-          contact: contactsMap[c.id] || null,
-        }));
-
-        setConvs(merged);
-      } catch (e) {
-        console.error("load dashboard failed:", e);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-
+        },
+        (err) => console.error("users presence snapshot error:", err)
+      );
+      unsubs.push(unsub);
+    }
     return () => {
-      cancelled = true;
+      for (const u of unsubs) {
+        try {
+          u && u();
+        } catch { }
+      }
     };
-  }, [tab]);
+  }, [vendors]);
+
+  // Zonas dinámicas (desde vendors activos)
+  const zonas = useMemo(() => {
+    const set = new Set(
+      vendors
+        .filter((v) => v.active)
+        .map((v) => (v.zone || "Sin zona").trim())
+        .filter(Boolean)
+    );
+    return ["(todas)", ...Array.from(set).sort()];
+  }, [vendors]);
 
   // Períodos rápidos
   useEffect(() => {
@@ -507,23 +553,250 @@ export default function AdminPanel() {
     }
   }, [mode]);
 
-  // Derivados
-  const range = useMemo(
-    () => [+startOfDayTZ(parseLocalYMD(from)), +endOfDayTZ(parseLocalYMD(to))],
-    [from, to]
+  // Derivados de rango
+  const range = useMemo(() => {
+    const a = +startOfDayTZ(parseLocalYMD(from));
+    const b = +endOfDayTZ(parseLocalYMD(to));
+    return [a, b];
+  }, [from, to]);
+
+  const rangeKey = useMemo(
+    () => `${from}__${to}__${CONV_TIME_FIELD}`,
+    [from, to, CONV_TIME_FIELD]
   );
 
-  const convsInRange = useMemo(() => {
-    const [a, b] = range;
-    return convs.filter((c) => {
-      const t =
-        mode === "today"
-          ? tsToMs(c.lastInboundAt) || tsToMs(c.firstInboundAt) || tsToMs(c.createdAt)
-          : tsToMs(c.lastMessageAt) || tsToMs(c.updatedAt) || tsToMs(c.createdAt);
-      return t >= a && t <= b;
-    });
-  }, [convs, range, mode]);
+  async function buildConvQueryBounds(startMs, endMs, afterDoc, lim, mode, field) {
+    const col = collection(db, "conversations");
+    const startDate = new Date(startMs);
+    const endDate = new Date(endMs);
 
+    if (mode === "timestamp") {
+      const qs = query(
+        col,
+        where(field, ">=", Timestamp.fromDate(startDate)),
+        where(field, "<=", Timestamp.fromDate(endDate)),
+        orderBy(field, "desc"),
+        ...(afterDoc ? [startAfter(afterDoc)] : []),
+        ...(lim ? [limit(lim)] : [])
+      );
+      return qs;
+    }
+
+    // mode === "number"
+    const qs = query(
+      col,
+      where(field, ">=", startMs),
+      where(field, "<=", endMs),
+      orderBy(field, "desc"),
+      ...(afterDoc ? [startAfter(afterDoc)] : []),
+      ...(lim ? [limit(lim)] : [])
+    );
+    return qs;
+  }
+
+  async function fetchConvPage(startMs, endMs, afterDoc, lim) {
+    const field = CONV_TIME_FIELD;
+
+    const tryMode = async (mode) => {
+      const qs = await buildConvQueryBounds(startMs, endMs, afterDoc, lim, mode, field);
+      const snap = await getDocs(qs);
+      const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const last = snap.docs[snap.docs.length - 1] || null;
+      return { items, last, empty: snap.empty };
+    };
+
+    const current = getFieldMode(field);
+    try {
+      return await tryMode(current);
+    } catch (e) {
+      const msg = String(e?.message || "");
+      const code = String(e?.code || "");
+      const shouldFallback =
+        code.includes("invalid-argument") ||
+        code.includes("failed-precondition") ||
+        msg.toLowerCase().includes("timestamp") ||
+        msg.toLowerCase().includes("expected") ||
+        msg.toLowerCase().includes("type") ||
+        msg.toLowerCase().includes("order by");
+
+      if (shouldFallback) {
+        // ✅ fallback en ambos sentidos
+        const nextMode = current === "timestamp" ? "number" : "timestamp";
+        setFieldMode(field, nextMode);
+        return await tryMode(nextMode);
+      }
+      throw e;
+    }
+  }
+
+  async function fetchRangeCount(startMs, endMs) {
+    const col = collection(db, "conversations");
+    const field = CONV_TIME_FIELD;
+    const mode = getFieldMode(field);
+
+    const tryCount = async (m) => {
+      const qs =
+        m === "timestamp"
+          ? query(
+            col,
+            where(field, ">=", Timestamp.fromDate(new Date(startMs))),
+            where(field, "<=", Timestamp.fromDate(new Date(endMs)))
+          )
+          : query(col, where(field, ">=", startMs), where(field, "<=", endMs));
+
+      const snap = await getCountFromServer(qs);
+      return snap.data().count;
+    };
+
+    try {
+      return await tryCount(mode);
+    } catch (e) {
+      const nextMode = mode === "timestamp" ? "number" : "timestamp";
+      setFieldMode(field, nextMode);
+      return await tryCount(nextMode);
+    }
+  }
+
+  async function ensureContacts(ids, { max = 60 } = {}) {
+    const contactsMap = contactsByIdRef.current || {};
+    const missing = (ids || []).filter((id) => id && !contactsMap[id]).slice(0, max);
+    if (!missing.length) return;
+
+    const patch = {};
+    for (const part of chunk(missing, 10)) {
+      const qs = query(collection(db, "contacts"), where(documentId(), "in", part));
+      const snap = await getDocs(qs);
+      snap.forEach((cd) => (patch[cd.id] = cd.data()));
+      await yieldToUI();
+    }
+
+    if (Object.keys(patch).length) {
+      setContactsById((prev) => ({ ...prev, ...patch }));
+    }
+  }
+
+  // ✅ Cargar conversaciones: SERVER FILTER + PROGRESIVO
+  useEffect(() => {
+    if (tab !== "dashboard") return;
+
+    let cancelled = false;
+
+    const PAGE_SIZE = 450; // páginas para completar el rango
+    const FAST_LIMIT = 250; // primer paint rápido (1 día)
+    const MAX_PER_RANGE = 6000; // guardrail (mes enorme)
+
+    (async () => {
+      setLoading(true);
+      setLoadingFull(false);
+      setLoadedAll(false);
+      setRangeCount(null);
+
+      const [a, b] = range;
+
+      // 1) si ya lo tenés cacheado, pintá instantáneo
+      const cached = convCacheRef.current.get(rangeKey);
+      if (cached?.items?.length) {
+        setConvs(cached.items);
+        setLoading(false);
+        setLoadingFull(!cached.loadedAll);
+        setLoadedAll(!!cached.loadedAll);
+
+        // igual refrescamos conteo (barato) por si cambió algo
+        try {
+          const cnt = await fetchRangeCount(a, b);
+          if (!cancelled) setRangeCount(cnt);
+        } catch (e) {
+          console.warn("count failed:", e?.code, e?.message);
+        }
+      }
+
+      // 2) conteo rápido (para que KPI “Total” sea real aunque aún no cargaste todo)
+      try {
+        const cnt = await fetchRangeCount(a, b);
+        if (!cancelled) setRangeCount(cnt);
+      } catch (e) {
+        console.warn("count failed:", e?.code, e?.message);
+      }
+
+      // 3) carga progresiva: si el rango es > 1 día => primero el día “to”
+      const daysInRange = Math.floor((b - a) / 86400000) + 1;
+      const fastStart = +startOfDayTZ(parseLocalYMD(to));
+      const fastEnd = +endOfDayTZ(parseLocalYMD(to));
+
+      try {
+        if (!cached?.items?.length) {
+          if (daysInRange > 1) {
+            const fast = await fetchConvPage(fastStart, fastEnd, null, FAST_LIMIT);
+            if (cancelled) return;
+            setConvs(fast.items);
+            convCacheRef.current.set(rangeKey, { items: fast.items, loadedAll: false, last: null });
+            setLoading(false);
+
+            // contactos visibles rápido
+            ensureContacts(fast.items.map((c) => c.id), { max: 40 }).catch(() => { });
+          } else {
+            // rango 1 día => directo
+            setLoading(false);
+          }
+        }
+
+        // 4) completar todo el rango “por debajo”
+        setLoadingFull(true);
+
+        let after = null;
+        let totalFetched = 0;
+        let merged = (convCacheRef.current.get(rangeKey)?.items || []).slice();
+
+        while (!cancelled) {
+          const page = await fetchConvPage(a, b, after, PAGE_SIZE);
+          if (cancelled) return;
+
+          if (!page.items.length) break;
+
+          totalFetched += page.items.length;
+          merged = uniqMergeById(merged, page.items);
+
+          setConvs(merged);
+          convCacheRef.current.set(rangeKey, { items: merged, loadedAll: false, last: page.last });
+
+          after = page.last;
+
+          // prefetechá contactos a ritmo suave (no spamear)
+          ensureContacts(page.items.map((c) => c.id), { max: 25 }).catch(() => { });
+
+          if (totalFetched >= MAX_PER_RANGE) {
+            console.warn("Guardrail: se alcanzó MAX_PER_RANGE, cortando carga para evitar freeze.");
+            break;
+          }
+
+          await yieldToUI();
+        }
+
+        if (!cancelled) {
+          setLoadingFull(false);
+          setLoadedAll(true);
+          convCacheRef.current.set(rangeKey, { items: merged, loadedAll: true, last: after });
+        }
+      } catch (e) {
+        console.error("progressive load failed:", e);
+        if (!cancelled) {
+          setLoading(false);
+          setLoadingFull(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, rangeKey, range, to]);
+
+  // Resetea paginado al cambiar filtros (sin refetch)
+  useEffect(() => {
+    setPage(1);
+  }, [mode, from, to, zoneFilter, labelFilter, q, CONV_TIME_FIELD]);
+
+  // Index por zona / nombre de vendors
   const vendorIndexByZone = useMemo(() => {
     const map = new Map();
     for (const v of vendors) {
@@ -550,11 +823,47 @@ export default function AdminPanel() {
     return map;
   }, [vendors]);
 
+  const vendedoresActivos = useMemo(() => vendors.filter((v) => !!v.active), [vendors]);
+
+  const vendedoresPorZona = useMemo(() => {
+    const map = {};
+    for (const v of vendedoresActivos) {
+      const z = v.zone || "Sin zona";
+      if (!map[z]) map[z] = [];
+      map[z].push(v);
+    }
+    return map;
+  }, [vendedoresActivos]);
+
+  const vendedoresPorZonaFiltrado = useMemo(() => {
+    if (zoneFilter === "(todas)") return vendedoresPorZona;
+    return { [zoneFilter]: vendedoresPorZona[zoneFilter] || [] };
+  }, [vendedoresPorZona, zoneFilter]);
+
+  const vendedoresEnZona = useMemo(() => {
+    return zoneFilter === "(todas)"
+      ? vendedoresActivos.length
+      : vendedoresPorZona[zoneFilter]?.length || 0;
+  }, [zoneFilter, vendedoresActivos.length, vendedoresPorZona]);
+
+  const getContact = (c) => contactsByIdRef.current?.[c.id] || c.contact || null;
+
+  const getAgentName = (c) => {
+    const uid = c.assignedToUid || "";
+    const u = usersByUid[uid];
+    const userName = u?.alias || u?.displayName || u?.name || "";
+    const vendorName = vendorNameByUid[uid] || "";
+    const assignedName = cleanAgentLabel(c.assignedToName || "");
+    const name = userName || vendorName || assignedName;
+    return name || (uid ? uid : "Sin asignar");
+  };
+
+  // FILTROS CLIENTE (ya viene por rango desde server, esto es extra: zona/labels/buscar)
   const convsByZone = useMemo(() => {
-    if (zoneFilter === "(todas)") return convsInRange;
+    if (zoneFilter === "(todas)") return deferredConvs;
     const idx = vendorIndexByZone.get(zoneFilter);
     if (!idx) return [];
-    return convsInRange.filter((c) => {
+    return deferredConvs.filter((c) => {
       const uid = c.assignedToUid || "";
       const name = c.assignedToName || "";
       const zone = c.assignedZone || "";
@@ -563,7 +872,7 @@ export default function AdminPanel() {
       if (name && idx.names.has(name)) return true;
       return false;
     });
-  }, [convsInRange, zoneFilter, vendorIndexByZone]);
+  }, [deferredConvs, zoneFilter, vendorIndexByZone]);
 
   const availableLabels = useMemo(() => {
     const set = new Set();
@@ -588,14 +897,11 @@ export default function AdminPanel() {
     if (!s) return convsByLabel;
     return convsByLabel.filter((c) => {
       const id = String(c.id || "").toLowerCase();
-      const name = String(c.contact?.name || "").toLowerCase();
-      return id.includes(s) || name.includes(s);
+      const name = String(getContact(c)?.name || "").toLowerCase();
+      const phone = String(getContact(c)?.phone || "").toLowerCase();
+      return id.includes(s) || name.includes(s) || phone.includes(s);
     });
   }, [convsByLabel, q]);
-
-  useEffect(() => {
-    setPage(1);
-  }, [mode, from, to, zoneFilter, labelFilter, q]);
 
   // Paginado
   const totalItems = convsFiltered.length;
@@ -605,19 +911,16 @@ export default function AdminPanel() {
   const sliceEnd = sliceStart + pageSize;
   const convsPage = convsFiltered.slice(sliceStart, sliceEnd);
 
-  // KPIs
-  const getAgentName = (c) => {
-    const uid = c.assignedToUid || "";
-    const u = usersByUid[uid];
-    const userName = u?.alias || u?.displayName || u?.name || "";
-    const vendorName = vendorNameByUid[uid] || "";
-    const assignedName = cleanAgentLabel(c.assignedToName || "");
-    const name = userName || vendorName || assignedName;
-    return name || (uid ? uid : "Sin asignar");
-  };
+  // Traé contactos SOLO de la página visible (instantáneo en UI)
+  useEffect(() => {
+    if (!convsPage.length) return;
+    ensureContacts(convsPage.map((c) => c.id), { max: 30 }).catch(() => { });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [convsPage.map((c) => c.id).join("|")]);
 
+  // KPIs (van mejorando a medida que llega data)
   const kpis = useMemo(() => {
-    const total = convsFiltered.length;
+    const total = rangeCount ?? convsFiltered.length; // si hay count, es el real del rango
     const sinAsignar = convsFiltered.filter((c) => !c.assignedToUid && !c.assignedToName).length;
 
     const porEtiqueta = {};
@@ -633,19 +936,20 @@ export default function AdminPanel() {
     }
 
     return { total, sinAsignar, porEtiqueta, porAgente };
-  }, [convsFiltered, usersByUid, vendorNameByUid]);
+  }, [convsFiltered, usersByUid, vendorNameByUid, rangeCount]);
 
   const seriePorDia = useMemo(() => {
-    const map = new Map();
     const [a, b] = range;
+    const map = new Map();
     for (let t = a; t <= b; t += 86400000) map.set(ymdTZ(new Date(t)), 0);
+
     for (const c of convsFiltered) {
-      const t = tsToMs(c.lastMessageAt) || tsToMs(c.createdAt);
+      const t = tsToMs(c[CONV_TIME_FIELD]) || tsToMs(c.createdAt);
       const key = ymdTZ(new Date(t));
       if (map.has(key)) map.set(key, (map.get(key) || 0) + 1);
     }
     return Array.from(map.entries()).map(([k, v]) => ({ k, v }));
-  }, [convsFiltered, range]);
+  }, [convsFiltered, range, CONV_TIME_FIELD]);
 
   const etiquetasData = useMemo(
     () =>
@@ -679,29 +983,6 @@ export default function AdminPanel() {
       .map(([k, v]) => ({ k, v }));
   }, [convsFiltered, usersByUid, vendorNameByUid]);
 
-  const vendedoresActivos = useMemo(() => vendors.filter((v) => !!v.active), [vendors]);
-
-  const vendedoresPorZona = useMemo(() => {
-    const map = {};
-    for (const v of vendedoresActivos) {
-      const z = v.zone || "Sin zona";
-      if (!map[z]) map[z] = [];
-      map[z].push(v);
-    }
-    return map;
-  }, [vendedoresActivos]);
-
-  const vendedoresPorZonaFiltrado = useMemo(() => {
-    if (zoneFilter === "(todas)") return vendedoresPorZona;
-    return { [zoneFilter]: vendedoresPorZona[zoneFilter] || [] };
-  }, [vendedoresPorZona, zoneFilter]);
-
-  const vendedoresEnZona = useMemo(() => {
-    return zoneFilter === "(todas)"
-      ? vendedoresActivos.length
-      : vendedoresPorZona[zoneFilter]?.length || 0;
-  }, [zoneFilter, vendedoresActivos.length, vendedoresPorZona]);
-
   // Exports
   const suffix = `${from}_a_${to}`;
   const doExportPorDia = () => {
@@ -729,29 +1010,39 @@ export default function AdminPanel() {
   // ────────────────────────────────────────────────────────────
   // UI
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-slate-100 to-indigo-100">
+    <div className="min-h-screen bg-base-200 text-base-content">
       <div className="px-4 py-6 mx-auto space-y-8 max-w-7xl sm:px-6 lg:px-8">
         {/* Header */}
-        <header className="relative overflow-hidden border shadow-xl rounded-3xl bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-slate-50">
-          <div className="absolute inset-0 opacity-20 bg-[radial-gradient(circle_at_top,_#4f46e5,_transparent_55%),radial-gradient(circle_at_bottom,_#0ea5e9,_transparent_55%)]" />
+        <header className="relative overflow-hidden border shadow-xl rounded-3xl bg-base-100 border-base-300">
+          <div
+            className="absolute inset-0 opacity-15"
+            style={{
+              backgroundImage:
+                "radial-gradient(circle at top, var(--color-primary), transparent 55%), radial-gradient(circle at bottom, var(--color-secondary), transparent 55%)",
+            }}
+          />
           <div className="relative flex flex-col gap-4 px-6 py-6 sm:px-10 sm:py-8 md:flex-row md:items-center md:justify-between">
             <div className="space-y-2">
-              <h1 className="text-3xl font-extrabold tracking-tight sm:text-4xl">
+              <h1 className="text-3xl font-extrabold tracking-tight sm:text-4xl text-base-content">
                 Panel de Administración
               </h1>
-              <p className="max-w-xl text-sm sm:text-base text-slate-300">
+              <p className="max-w-xl text-sm sm:text-base text-base-content/60">
                 Vista central para controlar conversaciones, vendedores, plantillas, etiquetas y tareas del equipo.
               </p>
             </div>
-            <div className="flex flex-col items-start gap-2 text-xs text-slate-300 md:items-end">
-              <span className="inline-flex items-center gap-2 px-3 py-1 border rounded-full bg-slate-800/80 border-slate-700">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+
+            <div className="flex flex-col items-start gap-2 text-xs md:items-end text-base-content/60">
+              <span className="inline-flex items-center gap-2 px-3 py-1 border rounded-full bg-base-200 border-base-300">
+                <span className="w-2 h-2 rounded-full" style={{ background: "var(--color-success)" }} />
                 Monitoreo en tiempo real
               </span>
               <span className="hidden md:block">
                 Rango actual:{" "}
-                <span className="font-semibold text-slate-100">
+                <span className="font-semibold text-base-content">
                   {from} → {to}
+                </span>{" "}
+                <span className="badge badge-outline ml-2" title={timeFieldMeta.hint}>
+                  {timeFieldMeta.label}
                 </span>
               </span>
             </div>
@@ -759,11 +1050,11 @@ export default function AdminPanel() {
         </header>
 
         {/* Vendedores por zona (resumen) */}
-        <section className="p-6 space-y-4 border shadow-lg rounded-2xl bg-white/95 backdrop-blur-md">
+        <section className="p-6 space-y-4 border shadow-lg rounded-2xl bg-base-100 border-base-300">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h3 className="mb-1 text-xl font-bold text-slate-900">🌍 Vendedores activos por zona</h3>
-              <p className="text-sm text-slate-500">
+              <h3 className="mb-1 text-xl font-bold text-base-content">🌍 Vendedores activos por zona</h3>
+              <p className="text-sm text-base-content/60">
                 Mapa rápido de cobertura de cada zona y presencia online de los vendedores.
               </p>
             </div>
@@ -773,23 +1064,30 @@ export default function AdminPanel() {
             {Object.entries(vendedoresPorZonaFiltrado).map(([zona, arr]) => (
               <div
                 key={zona}
-                className="p-4 space-y-3 border shadow-sm rounded-2xl bg-gradient-to-br from-slate-50 to-slate-100 border-slate-200/60"
+                className="p-4 space-y-3 border shadow-sm rounded-2xl bg-base-200 border-base-300"
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className="inline-flex items-center justify-center w-8 h-8 text-sm font-semibold rounded-full bg-slate-900/90 text-slate-50">
+                    <span
+                      className="inline-flex items-center justify-center w-8 h-8 text-sm font-semibold rounded-full"
+                      style={{
+                        background: "var(--color-primary)",
+                        color: "var(--color-primary-content)",
+                      }}
+                    >
                       {zona.charAt(0).toUpperCase()}
                     </span>
                     <div>
-                      <div className="font-semibold text-slate-800">{zona}</div>
-                      <div className="text-xs text-slate-500">
-                        {arr.length > 0 ? "Vendedores asignados a esta zona." : "Sin vendedores activos asignados."}
+                      <div className="font-semibold text-base-content">{zona}</div>
+                      <div className="text-xs text-base-content/60">
+                        {arr.length > 0
+                          ? "Vendedores asignados a esta zona."
+                          : "Sin vendedores activos asignados."}
                       </div>
                     </div>
                   </div>
-                  <div className="px-3 py-1 text-xs rounded-full bg-slate-900 text-slate-50">
-                    {arr.length} vendedor(es)
-                  </div>
+
+                  <span className="badge badge-neutral">{arr.length} vendedor(es)</span>
                 </div>
 
                 <ul className="space-y-2">
@@ -797,34 +1095,31 @@ export default function AdminPanel() {
                     const uid = v.ownerUid || v.userUid || v.uid || v.id;
                     const u = usersByUid[uid];
                     const online = calcOnline(u);
+
                     return (
                       <li
                         key={v.id}
-                        className="flex flex-wrap items-center justify-between gap-2 p-2 border rounded-xl bg-white/80 border-slate-200/60"
+                        className="flex flex-wrap items-center justify-between gap-2 p-2 border rounded-xl bg-base-100 border-base-300"
                       >
-                        <span className="text-sm font-medium text-slate-700">
+                        <span className="text-sm font-medium text-base-content">
                           {v.alias || v.owner || v.phone}
-                          {v.phone ? <span className="text-xs text-slate-400"> · {v.phone}</span> : null}
+                          {v.phone ? <span className="text-xs text-base-content/60"> · {v.phone}</span> : null}
                         </span>
 
                         <div className="flex items-center gap-2">
                           <span
-                            className={`px-2 py-1 text-[11px] rounded-full flex items-center gap-1 ${online
-                                ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                : "bg-rose-50 text-rose-700 border border-rose-200"
-                              }`}
+                            className={`badge badge-sm ${online ? "badge-success" : "badge-error"}`}
                             title={
                               u?.lastSeen
                                 ? `Visto: ${new Date(tsToMs(u.lastSeen)).toLocaleString()}`
                                 : undefined
                             }
                           >
-                            <span className={`w-2 h-2 rounded-full ${online ? "bg-emerald-500" : "bg-rose-500"}`} />
                             {online ? "Online" : "Offline"}
                           </span>
 
                           <button
-                            className="px-3 py-1 text-xs font-medium bg-white border rounded-lg shadow-sm border-slate-200 hover:bg-slate-50"
+                            className="btn btn-sm btn-ghost"
                             onClick={() => {
                               setSelectedVendorUid(uid);
                               setTab("vendorDetail");
@@ -843,7 +1138,7 @@ export default function AdminPanel() {
         </section>
 
         {/* Tabs */}
-        <nav className="p-2 border shadow-lg rounded-2xl bg-white/90 backdrop-blur-md">
+        <nav className="p-2 border shadow-lg rounded-2xl bg-base-100 border-base-300">
           <div className="flex flex-wrap gap-2">
             {[
               { key: "numbers", label: "📱 Números" },
@@ -854,10 +1149,7 @@ export default function AdminPanel() {
             ].map(({ key, label }) => (
               <button
                 key={key}
-                className={`px-5 py-2.5 rounded-2xl text-sm font-medium transition-all duration-200 ${tab === key
-                    ? "text-white shadow-lg shadow-blue-500/25 bg-gradient-to-r from-blue-600 to-indigo-600"
-                    : "text-slate-700 bg-white/0 hover:bg-slate-100 hover:shadow-sm"
-                  }`}
+                className={`btn btn-sm rounded-2xl ${tab === key ? "btn-primary" : "btn-ghost"}`}
                 onClick={() => setTab(key)}
               >
                 {label}
@@ -873,22 +1165,29 @@ export default function AdminPanel() {
 
         {tab === "dashboard" && (
           <div className="space-y-8">
-            {loading && (
-              <div className="flex flex-col items-center justify-center gap-3 py-12">
-                <div className="w-10 h-10 border-2 border-transparent rounded-full border-b-blue-600 animate-spin" />
-                <span className="text-sm font-medium text-slate-600">Cargando datos del dashboard…</span>
+            {(loading || loadingFull) && (
+              <div className="flex flex-col items-center justify-center gap-3 py-6">
+                <span className="loading loading-spinner loading-md" />
+                <span className="text-sm font-medium text-base-content/70">
+                  {loading ? "Cargando rápido…" : "Completando rango en segundo plano…"}
+                </span>
+                {!loadedAll && (
+                  <span className="text-xs text-base-content/60">
+                    Tip: ya podés usar el panel; el resto llega “por debajo”.
+                  </span>
+                )}
               </div>
             )}
 
             {!loading && (
               <>
                 {/* Filtros */}
-                <section className="p-6 space-y-6 border shadow-lg rounded-2xl bg-white/95 backdrop-blur-md">
+                <section className="p-6 space-y-6 border shadow-lg rounded-2xl bg-base-100 border-base-300">
                   <div className="flex flex-wrap items-end gap-4">
                     <div className="space-y-2">
-                      <label className="text-sm font-semibold text-slate-700">Período</label>
+                      <label className="text-sm font-semibold text-base-content/80">Período</label>
                       <select
-                        className="px-4 py-2 text-sm transition-all border rounded-xl border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="select select-bordered bg-base-100 text-base-content"
                         value={mode}
                         onChange={(e) => setMode(e.target.value)}
                       >
@@ -900,22 +1199,42 @@ export default function AdminPanel() {
                       </select>
                     </div>
 
+                    {/* ✅ NUEVO: selector de métrica */}
+                    <div className="space-y-2">
+                      <label className="text-sm font-semibold text-base-content/80">
+                        Métrica
+                        <span className="ml-2 badge badge-outline" title={timeFieldMeta.hint}>
+                          {timeFieldMeta.label}
+                        </span>
+                      </label>
+                      <select
+                        className="select select-bordered bg-base-100 text-base-content"
+                        value={CONV_TIME_FIELD}
+                        onChange={(e) => setTimeField(e.target.value)}
+                        title="Define qué campo de tiempo se usa para contar/filtrar el dashboard"
+                      >
+                        <option value="lastInboundAt">Inbound (cliente) — lastInboundAt</option>
+                        <option value="lastMessageAt">Actividad (in/out) — lastMessageAt</option>
+                        <option value="firstInboundAt">Nuevas (primer inbound) — firstInboundAt</option>
+                      </select>
+                    </div>
+
                     {mode === "custom" && (
                       <>
                         <div className="space-y-2">
-                          <label className="text-sm font-semibold text-slate-700">Desde</label>
+                          <label className="text-sm font-semibold text-base-content/80">Desde</label>
                           <input
                             type="date"
-                            className="px-4 py-2 text-sm transition-all border rounded-xl border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            className="input input-bordered bg-base-100 text-base-content"
                             value={from}
                             onChange={(e) => setFrom(e.target.value)}
                           />
                         </div>
                         <div className="space-y-2">
-                          <label className="text-sm font-semibold text-slate-700">Hasta</label>
+                          <label className="text-sm font-semibold text-base-content/80">Hasta</label>
                           <input
                             type="date"
-                            className="px-4 py-2 text-sm transition-all border rounded-xl border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            className="input input-bordered bg-base-100 text-base-content"
                             value={to}
                             onChange={(e) => setTo(e.target.value)}
                           />
@@ -924,9 +1243,9 @@ export default function AdminPanel() {
                     )}
 
                     <div className="space-y-2">
-                      <label className="text-sm font-semibold text-slate-700">Zona</label>
+                      <label className="text-sm font-semibold text-base-content/80">Zona</label>
                       <select
-                        className="px-4 py-2 text-sm transition-all border rounded-xl border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="select select-bordered bg-base-100 text-base-content"
                         value={zoneFilter}
                         onChange={(e) => setZoneFilter(e.target.value)}
                       >
@@ -939,11 +1258,11 @@ export default function AdminPanel() {
                     </div>
 
                     <div className="flex-1 min-w-[200px] space-y-2">
-                      <label className="text-sm font-semibold text-slate-700">Buscar</label>
+                      <label className="text-sm font-semibold text-base-content/80">Buscar</label>
                       <input
                         type="text"
                         placeholder="Buscar por nombre o ID de conversación…"
-                        className="w-full px-4 py-2 text-sm transition-all border rounded-xl border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className="input input-bordered bg-base-100 text-base-content placeholder:text-base-content/50 w-full"
                         value={q}
                         onChange={(e) => setQ(e.target.value)}
                       />
@@ -951,7 +1270,7 @@ export default function AdminPanel() {
 
                     <div className="flex flex-wrap items-center gap-2 ml-auto">
                       <button
-                        className="px-5 py-2 text-sm text-white transition shadow-md rounded-xl bg-gradient-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800"
+                        className="btn btn-primary"
                         onClick={() => {
                           setMode("today");
                           setZoneFilter("(todas)");
@@ -964,7 +1283,7 @@ export default function AdminPanel() {
                       </button>
 
                       <button
-                        className="px-5 py-2 text-sm transition shadow-sm text-slate-800 rounded-xl bg-slate-100 hover:bg-slate-200"
+                        className="btn btn-ghost"
                         onClick={() => {
                           setZoneFilter("(todas)");
                           setLabelFilter([]);
@@ -980,10 +1299,10 @@ export default function AdminPanel() {
                   {/* Filtro de etiquetas */}
                   <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <div className="space-y-2">
-                      <label className="text-sm font-semibold text-slate-700">Etiquetas</label>
+                      <label className="text-sm font-semibold text-base-content/80">Etiquetas</label>
                       <select
                         multiple
-                        className="min-h-[110px] w-full px-4 py-2 text-sm rounded-xl border border-slate-200 bg-white/80 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                        className="select select-bordered bg-base-100 text-base-content min-h-[110px] w-full"
                         value={labelFilter}
                         onChange={(e) => {
                           const vals = Array.from(e.target.selectedOptions).map((o) => o.value);
@@ -1002,48 +1321,60 @@ export default function AdminPanel() {
                           ))
                         )}
                       </select>
+
                       {!!labelFilter.length && (
-                        <div className="mt-1 text-xs text-slate-600">
+                        <div className="mt-1 text-xs text-base-content/70">
                           Seleccionadas: {labelFilter.join(", ")}
                         </div>
                       )}
                     </div>
 
                     <div className="space-y-2 opacity-80">
-                      <label className="text-sm font-semibold text-slate-700">Agentes</label>
-                      <div className="px-4 py-3 text-sm border border-dashed rounded-xl bg-slate-50 text-slate-500">
+                      <label className="text-sm font-semibold text-base-content/80">Agentes</label>
+                      <div className="px-4 py-3 text-sm border border-dashed rounded-xl bg-base-200 border-base-300 text-base-content/60">
                         El filtrado por vendedor/agente se hace en el detalle (VendorDetailPanel).
                       </div>
                     </div>
                   </div>
 
-                  <div className="flex justify-end text-xs text-slate-500">
+                  <div className="flex justify-end text-xs text-base-content/60">
                     Mostrando{" "}
-                    <span className="mx-1 font-semibold text-slate-700">{convsFiltered.length}</span>
-                    conversaciones en el rango seleccionado.
+                    <span className="mx-1 font-semibold text-base-content">{convsFiltered.length}</span>
+                    conversaciones (cargadas) — total real estimado:{" "}
+                    <span className="mx-1 font-semibold text-base-content">
+                      {rangeCount == null ? "…" : rangeCount}
+                    </span>{" "}
+                    <span className="badge badge-outline ml-2" title={timeFieldMeta.hint}>
+                      {timeFieldMeta.label}
+                    </span>
                   </div>
                 </section>
 
                 {/* KPIs principales */}
                 <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
-                  <MiniStatCard title="Total conversaciones" value={kpis.total} from="#e6f0ff" to="#eaf3ff" text="#1e40af" />
-                  <MiniStatCard title="Sin asignar" value={kpis.sinAsignar} from="#fff1cc" to="#fff4d6" text="#7c2d12" />
-                  <MiniStatCard title="Zonas activas" value={Object.keys(vendedoresPorZona).length} from="#dcfce7" to="#e7f9ef" text="#064e3b" />
-                  <MiniStatCard title="Vendedores activos" value={vendedoresActivos.length} from="#f5ebff" to="#f3e8ff" text="#4c1d95" />
-                  <MiniStatCard title="Vendedores en esta zona" value={vendedoresEnZona} from="#e6f0ff" to="#eaf3ff" text="#312e81" />
+                  <MiniStatCard
+                    title={`Total conversaciones (${timeFieldMeta.label})`}
+                    value={kpis.total}
+                    tone="primary"
+                  />
+                  <MiniStatCard title="Sin asignar" value={kpis.sinAsignar} tone="warning" />
+                  <MiniStatCard
+                    title="Zonas activas"
+                    value={Object.keys(vendedoresPorZona).length}
+                    tone="success"
+                  />
+                  <MiniStatCard title="Vendedores activos" value={vendedoresActivos.length} tone="secondary" />
+                  <MiniStatCard title="Vendedores en esta zona" value={vendedoresEnZona} tone="accent" />
                 </div>
 
                 {/* Conversaciones por día */}
                 <ListStatCard
-                  title="📈 Conversaciones por día"
-                  accent="#2563eb"
+                  title={`📈 Conversaciones por día — ${timeFieldMeta.label}`}
+                  accent="var(--color-primary)"
                   data={seriePorDia.map((d) => ({ k: d.k, v: d.v }))}
                   formatter={(k) => k}
                   exportBtn={
-                    <button
-                      className="px-4 py-2 text-xs text-white shadow-lg sm:text-sm rounded-xl bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700"
-                      onClick={doExportPorDia}
-                    >
+                    <button className="btn btn-primary btn-sm" onClick={doExportPorDia}>
                       📊 Exportar CSV
                     </button>
                   }
@@ -1052,14 +1383,11 @@ export default function AdminPanel() {
                 {/* Top etiquetas */}
                 <ListStatCard
                   title="🏷️ Top etiquetas"
-                  accent="#16a34a"
+                  accent="var(--color-success)"
                   data={etiquetasData}
                   formatter={(k) => k}
                   exportBtn={
-                    <button
-                      className="px-4 py-2 text-xs text-white shadow-lg sm:text-sm rounded-xl bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700"
-                      onClick={doExportEtiquetas}
-                    >
+                    <button className="btn btn-success btn-sm" onClick={doExportEtiquetas}>
                       📊 Exportar CSV
                     </button>
                   }
@@ -1068,43 +1396,44 @@ export default function AdminPanel() {
                 {/* Distribución por agente */}
                 <ListStatCard
                   title="👥 Conversaciones por agente"
-                  accent="#7c3aed"
+                  accent="var(--color-secondary)"
                   data={agentesData}
                   formatter={(k) => String(k).replace(/\s*\([^)]*\)\s*$/, "")}
                   exportBtn={
-                    <button
-                      className="px-4 py-2 text-xs text-white shadow-lg sm:text-sm rounded-xl bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700"
-                      onClick={doExportAgentes}
-                    >
+                    <button className="btn btn-secondary btn-sm" onClick={doExportAgentes}>
                       📊 Exportar CSV
                     </button>
                   }
                 />
 
                 {/* Ventas por vendedor */}
-                <ListStatCard title="🛒 Ventas por vendedor" accent="#16a34a" data={ventasPorAgente} formatter={(k) => String(k)} />
+                <ListStatCard
+                  title="🛒 Ventas por vendedor"
+                  accent="var(--color-success)"
+                  data={ventasPorAgente}
+                  formatter={(k) => String(k)}
+                />
 
                 {/* Tabla de conversaciones */}
-                <section className="p-6 space-y-4 border shadow rounded-2xl bg-white/95 backdrop-blur-md">
+                <section className="p-6 space-y-4 border shadow rounded-2xl bg-base-100 border-base-300">
                   <div className="flex items-center justify-between gap-3">
-                    <h3 className="flex items-center gap-2 text-xl font-bold text-slate-900">
+                    <h3 className="flex items-center gap-2 text-xl font-bold text-base-content">
                       <span>📚 Conversaciones</span>
-                      <span className="px-2 py-0.5 text-[10px] rounded-full bg-slate-100 text-slate-500 border border-slate-200">
-                        Vista detallada
-                      </span>
+                      <span className="badge badge-outline">Vista detallada</span>
                     </h3>
-                    <div className="text-xs sm:text-sm text-slate-600">
-                      Mostrando <span className="font-semibold">{convsPage.length}</span> de {totalItems} (pág. {pageClamped}/{totalPages})
+                    <div className="text-xs sm:text-sm text-base-content/70">
+                      Mostrando <span className="font-semibold">{convsPage.length}</span> de {totalItems} (pág.{" "}
+                      {pageClamped}/{totalPages})
                     </div>
                   </div>
 
                   {convsPage.length === 0 ? (
-                    <div className="p-6 text-sm text-center border rounded-xl bg-slate-50 text-slate-500">
+                    <div className="p-6 text-sm text-center border rounded-xl bg-base-200 border-base-300 text-base-content/60">
                       Sin resultados para los filtros actuales.
                     </div>
                   ) : (
                     <>
-                      <div className="overflow-auto border rounded-xl">
+                      <div className="overflow-auto border rounded-xl bg-base-100 border-base-300">
                         <table className="table table-sm">
                           <thead className="bg-base-200/70">
                             <tr>
@@ -1113,46 +1442,63 @@ export default function AdminPanel() {
                               <th className="text-xs">Asignado</th>
                               <th className="text-xs">Etiquetas</th>
                               <th className="text-xs whitespace-nowrap">Creada</th>
-                              <th className="text-xs whitespace-nowrap">Último msj</th>
+                              <th className="text-xs whitespace-nowrap" title={timeFieldMeta.hint}>
+                                {timeFieldMeta.shortCol}
+                              </th>
                             </tr>
                           </thead>
                           <tbody>
-                            {convsPage.map((c) => (
-                              <tr key={c.id} className="align-top hover">
-                                <td className="font-mono text-[11px]">{c.id}</td>
-                                <td>
-                                  <div className="text-sm font-medium">{c.contact?.name || "—"}</div>
-                                  <div className="text-xs text-slate-500">{c.contact?.phone || ""}</div>
-                                </td>
-                                <td className="text-xs sm:text-sm">{getAgentName(c)}</td>
-                                <td className="text-xs sm:text-sm">
-                                  {(Array.isArray(c.labels) ? c.labels : []).join(", ")}
-                                </td>
-                                <td className="text-[11px] text-slate-600 whitespace-nowrap">
-                                  {tsToMs(c.createdAt) ? new Date(tsToMs(c.createdAt)).toLocaleString() : "—"}
-                                </td>
-                                <td className="text-[11px] text-slate-600 whitespace-nowrap">
-                                  {tsToMs(c.lastMessageAt) ? new Date(tsToMs(c.lastMessageAt)).toLocaleString() : "—"}
-                                </td>
-                              </tr>
-                            ))}
+                            {convsPage.map((c) => {
+                              const contact = getContact(c);
+
+                              const createdMs = tsToMs(c.createdAt);
+                              const metricMs = tsToMs(c[CONV_TIME_FIELD]);
+                              const activityMs = tsToMs(c.lastMessageAt);
+
+                              return (
+                                <tr key={c.id} className="align-top hover">
+                                  <td className="font-mono text-[11px]">{c.id}</td>
+                                  <td>
+                                    <div className="text-sm font-medium">{contact?.name || "—"}</div>
+                                    <div className="text-xs text-base-content/60">{contact?.phone || ""}</div>
+                                  </td>
+                                  <td className="text-xs sm:text-sm">{getAgentName(c)}</td>
+                                  <td className="text-xs sm:text-sm">
+                                    {(Array.isArray(c.labels) ? c.labels : []).join(", ")}
+                                  </td>
+                                  <td className="text-[11px] text-base-content/70 whitespace-nowrap">
+                                    {createdMs ? new Date(createdMs).toLocaleString() : "—"}
+                                  </td>
+
+                                  <td className="text-[11px] text-base-content/70 whitespace-nowrap">
+                                    {metricMs ? new Date(metricMs).toLocaleString() : "—"}
+                                    {/* si la métrica NO es lastMessageAt, muestro igual la actividad total como ayuda */}
+                                    {CONV_TIME_FIELD !== "lastMessageAt" && activityMs ? (
+                                      <div className="text-[10px] text-base-content/50">
+                                        Act.: {new Date(activityMs).toLocaleString()}
+                                      </div>
+                                    ) : null}
+                                  </td>
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
 
                       <div className="flex flex-wrap items-center justify-between gap-3 mt-4">
                         <button
-                          className="px-3 py-2 text-sm bg-white border rounded-lg hover:bg-slate-50 disabled:opacity-50"
+                          className="btn btn-ghost btn-sm"
                           disabled={pageClamped <= 1}
                           onClick={() => setPage((p) => Math.max(1, p - 1))}
                         >
                           ← Anterior
                         </button>
-                        <div className="text-xs sm:text-sm text-slate-600">
+                        <div className="text-xs sm:text-sm text-base-content/70">
                           Página {pageClamped} de {totalPages}
                         </div>
                         <button
-                          className="px-3 py-2 text-sm bg-white border rounded-lg hover:bg-slate-50 disabled:opacity-50"
+                          className="btn btn-ghost btn-sm"
                           disabled={pageClamped >= totalPages}
                           onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                         >
@@ -1163,15 +1509,13 @@ export default function AdminPanel() {
                   )}
                 </section>
 
-                {/* ✅ Conversaciones Hoy: se monta solo cuando estás en dashboard y ya cargó,
-                    así evitás 2 cargas pesadas al entrar */}
-                <div className="p-4 mt-4 border shadow-inner rounded-2xl bg-white/80">
-                  <h3 className="flex items-center gap-2 mb-2 text-sm font-semibold text-slate-800">
+                {/* Conversaciones Hoy */}
+                <div className="p-4 mt-4 border shadow-inner rounded-2xl bg-base-100 border-base-300">
+                  <h3 className="flex items-center gap-2 mb-2 text-sm font-semibold text-base-content">
                     <span>📆 Conversaciones de hoy (detalle rápido)</span>
-                    <span className="px-2 py-0.5 text-[10px] rounded-full bg-slate-100 text-slate-500 border border-slate-200">
-                      Embebido
-                    </span>
+                    <span className="badge badge-outline">Embebido</span>
                   </h3>
+
                   <ConversacionesHoy
                     collectionName="conversations"
                     adsConfig={{

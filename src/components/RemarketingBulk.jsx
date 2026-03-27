@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { db } from "../firebase";
 import { collection, query, where, orderBy, limit, getDocs } from "firebase/firestore";
 import { listLabels } from "../lib/labels";
-import { getAuth } from "firebase/auth";
+import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { useNavigate } from "react-router-dom";
 
 // ---------- Config ----------
@@ -19,18 +19,29 @@ function normPhone(raw) {
   if (!raw) return "";
   const s = String(raw).trim();
   if (!s) return "";
-  const cleaned = s.startsWith("+") ? "+" + s.slice(1).replace(/\D+/g, "") : "+" + s.replace(/\D+/g, "");
+  const cleaned = s.startsWith("+")
+    ? "+" + s.slice(1).replace(/\D+/g, "")
+    : "+" + s.replace(/\D+/g, "");
   const digits = cleaned.replace(/\D/g, "");
   if (digits.length < 8 || digits.length > 15) return "";
   return cleaned;
 }
+
 function countTemplateVars(templateBody = "") {
   const matches = templateBody.match(/\{\{\d+\}\}/g) || [];
-  const maxIndex = matches.map((m) => parseInt(m.replace(/\{|\}/g, ""), 10)).reduce((a, b) => Math.max(a, b), 0);
+  const maxIndex = matches
+    .map((m) => parseInt(m.replace(/\{|\}/g, ""), 10))
+    .reduce((a, b) => Math.max(a, b), 0);
   return maxIndex;
 }
+
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
-function chunk(arr, size = 10) { const out = []; for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size)); return out; }
+
+function chunk(arr, size = 10) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
 
 // Saludo según hora local
 function getTimeGreeting(d = new Date()) {
@@ -48,35 +59,39 @@ function fallbackForVar1FromTemplateBody(tplBody) {
     "hola, {{1}}",
     "hola {{1}},",
     "hola,{{1}}",
-    "hola,{{1}},"
+    "hola,{{1}},",
   ];
   const hasHolaPrefix = patterns.some((p) => body.includes(p));
   return hasHolaPrefix ? "" : getTimeGreeting();
 }
 
-// Sanea variables para cumplir reglas de Meta (sin \n/\t y sin 5+ espacios)
+// ✅ Sanitización para Meta: sin \n ni tabs dentro del parámetro
 function sanitizeParamText(input) {
-  if (input === "\u200B") return input; // respetar ZWSP cuando se usa
+  if (input === "\u200B") return input;
+
   let x = String(input ?? "");
-
-  // 1) normalización básica
-  x = x.replace(/\r+/g, " ");   // quitar \r
-  x = x.replace(/\t+/g, " ");   // quitar \t
-
-  // 2) NUEVO: NO se permiten \n -> los convertimos en separadores
-  x = x.replace(/\n+/g, " • ");
-
-  // 3) espacios: colapsar y evitar 5+ consecutivos
-  x = x.replace(/\s{2,}/g, " ");
+  x = x.replace(/\r\n?/g, "\n");
+  x = x.replace(/\t+/g, " ");
+  x = x.replace(/\n+/g, " ");
   x = x.replace(/ {5,}/g, "    ");
-
+  x = x.replace(/ {2,}/g, " ");
   x = x.trim();
 
-  // 4) límite Meta por parámetro
   const MAX_PARAM_LEN = 1000;
   if (x.length > MAX_PARAM_LEN) x = x.slice(0, MAX_PARAM_LEN - 1) + "…";
-
   return x;
+}
+
+function getVarLabel(idx) {
+  if (idx === 0) return "{{1}} Cliente (opcional)";
+  if (idx === 1) return "{{2}} Vendedora";
+  return `{{${idx + 1}}} Promo ${idx - 1}`;
+}
+
+function getVarPlaceholder(idx) {
+  if (idx === 0) return "Nombre del cliente";
+  if (idx === 1) return "Nombre de la vendedora";
+  return `Promo ${idx - 1} - Ej: ✳️ LATEX LAVABLE 20Lts + RODILLO + ENDUIDO $35.100`;
 }
 
 // ---------- fetch con token ----------
@@ -94,13 +109,40 @@ async function authFetch(path, options = {}) {
 async function sendTemplate({ phone, components = [] }) {
   const resp = await authFetch("/api/send-template", {
     method: "POST",
-    body: JSON.stringify({ phone, components }),
+    body: JSON.stringify({
+      phone,
+      templateName: LOCKED_TEMPLATE,
+      languageCode: LOCKED_LANG,
+      components,
+    }),
   });
+
   const text = await resp.text();
   let data = {};
-  try { data = text ? JSON.parse(text) : {}; } catch (e){console.error(e);}
-  if (!resp.ok) throw new Error(data?.error?.message || data?.error || text || `HTTP ${resp.status}`);
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch (e) {
+    console.error(e);
+  }
+
+  if (!resp.ok) {
+    throw new Error(data?.error?.message || data?.error || text || `HTTP ${resp.status}`);
+  }
   return data;
+}
+
+/**
+ * Reglas "enviable" (mismo criterio que el backend):
+ * - optIn debe ser true
+ * - marketingOptIn:
+ *    - true => enviable
+ *    - false => NO enviable (opt-out)
+ *    - undefined => enviable (compat hacia atrás)
+ */
+function isRowSendable(r) {
+  const optIn = r?.optIn === true;
+  const m = r?.marketingOptIn;
+  return optIn && (m === true || m === undefined);
 }
 
 export default function RemarketingBulk({ onClose }) {
@@ -109,6 +151,14 @@ export default function RemarketingBulk({ onClose }) {
   // eslint-disable-next-line no-unused-vars
   const navigate = useNavigate();
 
+  // --- uid actual (para filtrar por assignedToUid) ---
+  const [currentUid, setCurrentUid] = useState(null);
+  useEffect(() => {
+    const auth = getAuth();
+    const unsub = onAuthStateChanged(auth, (u) => setCurrentUid(u?.uid || null));
+    return () => unsub();
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -116,14 +166,16 @@ export default function RemarketingBulk({ onClose }) {
         const r = await authFetch("/api/templates");
         const t = await r.text();
         const data = t ? JSON.parse(t) : {};
-        const arr = Array.isArray(data) ? data : (data?.templates || data?.data || []);
+        const arr = Array.isArray(data) ? data : data?.templates || data?.data || [];
         if (!cancelled) setTemplatesRaw(arr || []);
       } catch (e) {
         console.error("fetch /api/templates error:", e);
         if (!cancelled) setTemplatesRaw([]);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -133,18 +185,23 @@ export default function RemarketingBulk({ onClose }) {
         const r = await authFetch("/api/sender");
         const data = await r.json();
         if (!cancelled && r.ok) setSenderInfo(data);
-      } catch (e){console.error(e)}
+      } catch (e) {
+        console.error(e);
+      }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const approvedTemplates = useMemo(() => {
     return (templatesRaw || []).filter((t) => {
-      const status = String(t?.status).toUpperCase() === "APPROVED";
+      const st = String(t?.status || "").toUpperCase();
+      const statusOk = ["APPROVED", "REINSTATED", "PAUSED", "PENDING", "IN_APPEAL"].includes(st);
       const cat = String(t?.category).toUpperCase() === "MARKETING";
-      const lang = (t?.language === LOCKED_LANG || t?.language?.code === LOCKED_LANG);
+      const lang = t?.language === LOCKED_LANG || t?.language?.code === LOCKED_LANG;
       const name = t?.name === LOCKED_TEMPLATE;
-      return status && cat && lang && name;
+      return statusOk && cat && lang && name;
     });
   }, [templatesRaw]);
 
@@ -158,7 +215,9 @@ export default function RemarketingBulk({ onClose }) {
   // ---------- Variables ----------
   const [mode, setMode] = useState("global");
   const [vars, setVars] = useState(() => Array.from({ length: Math.max(varCount, 1) }, () => ""));
-  useEffect(() => { setVars(Array.from({ length: Math.max(varCount, 1) }, () => "")); }, [varCount]);
+  useEffect(() => {
+    setVars(Array.from({ length: Math.max(varCount, 1) }, () => ""));
+  }, [varCount]);
 
   // ---------- Destinatarios ----------
   const [destMode, setDestMode] = useState("tags");
@@ -167,57 +226,102 @@ export default function RemarketingBulk({ onClose }) {
   const [labelsError, setLabelsError] = useState("");
   const [selectedLabels, setSelectedLabels] = useState([]);
 
-  // Con opt-in (para envío)
-  const [tagPhonesOpt, setTagPhonesOpt] = useState([]);
-  const [tagMetaOpt, setTagMetaOpt] = useState([]);
-
-  // Total sin filtro (solo vista previa)
-  const [tagPhonesAll, setTagPhonesAll] = useState([]);
-  const [tagMetaAll, setTagMetaAll] = useState([]);
-
+  const [tagRowsSendable, setTagRowsSendable] = useState([]);
+  const [tagRowsOptInAll, setTagRowsOptInAll] = useState([]);
+  const [tagRowsAll, setTagRowsAll] = useState([]);
   const [tagPhonesLoading, setTagPhonesLoading] = useState(false);
-  const [includeNoOptIn, setIncludeNoOptIn] = useState(false); // toggle vista previa sin opt-in
 
-  // ===== NUEVO: Mostrar/copiar números con estado =====
+  const [includeNoOptIn, setIncludeNoOptIn] = useState(false);
+  const [includeNoMarketingOptIn, setIncludeNoMarketingOptIn] = useState(false);
+
   const [showNumbers, setShowNumbers] = useState(false);
-  const displayMeta = includeNoOptIn ? tagMetaAll : tagMetaOpt;
+
+  // selección manual de teléfonos enviables
+  const [selectedTagPhones, setSelectedTagPhones] = useState([]);
+
+  const previewRows = useMemo(() => {
+    if (includeNoOptIn) return tagRowsAll;
+    if (includeNoMarketingOptIn) return tagRowsOptInAll;
+    return tagRowsSendable;
+  }, [includeNoOptIn, includeNoMarketingOptIn, tagRowsAll, tagRowsOptInAll, tagRowsSendable]);
+
+  const selectedTagPhonesSet = useMemo(() => new Set(selectedTagPhones), [selectedTagPhones]);
+
+  const sendRows = useMemo(() => {
+    return tagRowsSendable.filter((r) => selectedTagPhonesSet.has(r.phone));
+  }, [tagRowsSendable, selectedTagPhonesSet]);
+
+  const sendPhones = useMemo(() => sendRows.map((r) => r.phone), [sendRows]);
+
+  function toggleTagPhone(phone) {
+    setSelectedTagPhones((prev) =>
+      prev.includes(phone) ? prev.filter((p) => p !== phone) : [...prev, phone]
+    );
+  }
+
+  function selectAllSendable() {
+    setSelectedTagPhones(tagRowsSendable.map((r) => r.phone));
+  }
+
+  function clearSelectedSendable() {
+    setSelectedTagPhones([]);
+  }
 
   const numbersText = useMemo(
     () =>
-      (displayMeta || [])
-        .map(r => `${r.phone}  ${r.optIn ? "✓ opt-in" : "✗ sin opt-in"}`)
+      (previewRows || [])
+        .map((r) => {
+          const m = r.marketingOptIn;
+          const mTxt = m === false ? "✗ sin marketing" : m === true ? "✓ marketing" : "○ marketing (legacy)";
+          const oTxt = r.optIn ? "✓ opt-in" : "✗ sin opt-in";
+          const sTxt = selectedTagPhonesSet.has(r.phone) ? "✓ seleccionado" : "— no seleccionado";
+          return `${r.phone}  ${oTxt}  ${mTxt}  ${sTxt}`;
+        })
         .join("\n"),
-    [displayMeta]
+    [previewRows, selectedTagPhonesSet]
   );
 
   async function copyNumbersAnnotated() {
     try {
       await navigator.clipboard.writeText(numbersText);
-      alert(`Copiado: ${displayMeta.length} filas (con estado)`);
-    } catch (e) { console.error("copy failed", e); }
+      alert(`Copiado: ${previewRows.length} filas (con estado)`);
+    } catch (e) {
+      console.error("copy failed", e);
+    }
   }
 
-  async function copyOnlyOptIn() {
+  async function copyOnlySendable() {
     try {
-      const plain = (tagMetaOpt || []).map(r => r.phone).join("\n");
+      const plain = (sendRows || []).map((r) => r.phone).join("\n");
       await navigator.clipboard.writeText(plain);
-      alert(`Copiado: ${tagMetaOpt.length} números (solo opt-in)`);
-    } catch (e) { console.error("copy failed", e); }
+      alert(`Copiado: ${sendRows.length} números seleccionados para enviar`);
+    } catch (e) {
+      console.error("copy failed", e);
+    }
   }
-// eslint-disable-next-line no-unused-vars
+
+  // eslint-disable-next-line no-unused-vars
   const [rawPhones, setRawPhones] = useState("");
   const numbers = useMemo(() => {
-    const rows = rawPhones.split(/\n|,|;|\s+/).map((x) => x.trim()).filter(Boolean);
+    const rows = rawPhones
+      .split(/\n|,|;|\s+/)
+      .map((x) => x.trim())
+      .filter(Boolean);
     const normed = rows.map(normPhone).filter(Boolean);
     return Array.from(new Set(normed));
   }, [rawPhones]);
 
   const [csvPreview, setCsvPreview] = useState([]);
   const fileInputRef = useRef(null);
+
   const onCsvUpload = async (file) => {
     if (!file) return;
     const text = await file.text();
-    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const lines = text
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+
     const out = [];
     for (const line of lines) {
       const parts = line.split(",").map((x) => x.trim());
@@ -227,6 +331,7 @@ export default function RemarketingBulk({ onClose }) {
       for (let i = 1; i <= varCount; i++) item[`v${i}`] = parts[i] || "";
       out.push(item);
     }
+
     setCsvPreview(out);
     setMode("csv");
   };
@@ -249,49 +354,84 @@ export default function RemarketingBulk({ onClose }) {
       try {
         setLabelsLoading(true);
         setLabelsError("");
+
         const base = await listLabels();
-        let deduced = [];
+
+        // ✅ deducimos SOLO de conversaciones del vendedor actual (assignedToUid)
+        let setSlugs = new Set();
         try {
-          const q = query(collection(db, "conversations"), orderBy("lastMessageAt", "desc"), limit(500));
+          if (!currentUid) throw new Error("no-auth");
+          const q = query(
+            collection(db, "conversations"),
+            where("assignedToUid", "==", currentUid),
+            orderBy("lastMessageAt", "desc"),
+            limit(500)
+          );
           const snap = await getDocs(q);
-          const setSlugs = new Set();
           for (const d of snap.docs) {
             const data = d.data();
             const ls = Array.isArray(data.labels) ? data.labels : [];
             ls.forEach((s) => setSlugs.add(String(s)));
           }
-          deduced = Array.from(setSlugs).map((s) => ({ slug: s, name: s }));
-        } catch (e) { console.warn("deduce labels from conversations error:", e); }
-        const union = new Map();
-        for (const l of base || []) union.set(String(l.slug), l);
-        for (const l of deduced) if (!union.has(String(l.slug))) union.set(String(l.slug), l);
-        const arr = Array.from(union.values()).sort((a, b) => String(a.name || a.slug).localeCompare(String(b.name || b.slug)));
+        } catch (e) {
+          console.warn("deduce labels from conversations error:", e);
+        }
+
+        let arr;
+        if (setSlugs.size === 0) {
+          arr = (base || []).slice().sort((a, b) =>
+            String(a.name || a.slug).localeCompare(String(b.name || b.slug))
+          );
+        } else {
+          const baseMap = new Map();
+          for (const l of base || []) baseMap.set(String(l.slug), l);
+
+          const union = new Map();
+          for (const slug of Array.from(setSlugs)) {
+            const key = String(slug);
+            union.set(key, baseMap.get(key) || { slug: key, name: key });
+          }
+
+          arr = Array.from(union.values()).sort((a, b) =>
+            String(a.name || a.slug).localeCompare(String(b.name || b.slug))
+          );
+        }
+
         if (!cancelled) setAllLabels(arr);
       } catch (e) {
         console.error("load labels error:", e);
-        if (!cancelled) { setLabelsError("No se pudieron cargar las etiquetas."); setAllLabels([]); }
-      } finally { if (!cancelled) setLabelsLoading(false); }
+        if (!cancelled) {
+          setLabelsError("No se pudieron cargar las etiquetas.");
+          setAllLabels([]);
+        }
+      } finally {
+        if (!cancelled) setLabelsLoading(false);
+      }
     })();
-    return () => { cancelled = true; };
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUid]);
 
   // ---------- Buscar conversaciones por etiquetas seleccionadas ----------
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        if (!selectedLabels.length) {
-          setTagPhonesOpt([]); setTagMetaOpt([]);
-          setTagPhonesAll([]); setTagMetaAll([]);
+        if (!selectedLabels.length || !currentUid) {
+          setTagRowsSendable([]);
+          setTagRowsOptInAll([]);
+          setTagRowsAll([]);
           return;
         }
         setTagPhonesLoading(true);
 
-        // 1) Con opt-in (para envío)
-        const byPhoneOpt = new Map();
+        // 1) optIn=true (lista "optIn all")
+        const byPhoneOptIn = new Map();
         for (const ch of chunk(selectedLabels, 10)) {
           const q1 = query(
             collection(db, "conversations"),
+            where("assignedToUid", "==", currentUid),
             where("optIn", "==", true),
             where("labels", "array-contains-any", ch),
             orderBy("lastMessageAt", "desc"),
@@ -302,21 +442,41 @@ export default function RemarketingBulk({ onClose }) {
             const data = d.data();
             const phone = normPhone(data.contactId || data.phone || d.id);
             if (!phone) continue;
+
             const t = data.lastMessageAt?.toMillis?.()
               ? data.lastMessageAt.toMillis()
-              : (data.lastMessageAt ? +new Date(data.lastMessageAt) : 0);
+              : data.lastMessageAt
+                ? +new Date(data.lastMessageAt)
+                : 0;
+
             const labelsArr = Array.isArray(data.labels) ? data.labels : [];
-            byPhoneOpt.set(phone, { phone, lastMessageAt: t, labels: labelsArr, optIn: data.optIn === true });
+
+            byPhoneOptIn.set(phone, {
+              phone,
+              lastMessageAt: t,
+              labels: labelsArr,
+              optIn: data.optIn === true,
+              marketingOptIn: data.marketingOptIn,
+            });
           }
         }
-        const arrOpt = Array.from(byPhoneOpt.values()).sort((a, b) => (b.lastMessageAt || 0) - (a.lastMessageAt || 0));
-        if (!cancelled) { setTagPhonesOpt(arrOpt.map(r => r.phone)); setTagMetaOpt(arrOpt); }
 
-        // 2) Total sin opt-in (solo vista previa)
+        const optInArr = Array.from(byPhoneOptIn.values()).sort(
+          (a, b) => (b.lastMessageAt || 0) - (a.lastMessageAt || 0)
+        );
+        const sendableArr = optInArr.filter(isRowSendable);
+
+        if (!cancelled) {
+          setTagRowsOptInAll(optInArr);
+          setTagRowsSendable(sendableArr);
+        }
+
+        // 2) total sin opt-in (solo vista previa)
         const byPhoneAll = new Map();
         for (const ch of chunk(selectedLabels, 10)) {
           const q2 = query(
             collection(db, "conversations"),
+            where("assignedToUid", "==", currentUid),
             where("labels", "array-contains-any", ch),
             orderBy("lastMessageAt", "desc"),
             limit(1000)
@@ -326,33 +486,58 @@ export default function RemarketingBulk({ onClose }) {
             const data = d.data();
             const phone = normPhone(data.contactId || data.phone || d.id);
             if (!phone) continue;
+
             const t = data.lastMessageAt?.toMillis?.()
               ? data.lastMessageAt.toMillis()
-              : (data.lastMessageAt ? +new Date(data.lastMessageAt) : 0);
+              : data.lastMessageAt
+                ? +new Date(data.lastMessageAt)
+                : 0;
+
             const labelsArr = Array.isArray(data.labels) ? data.labels : [];
-            byPhoneAll.set(phone, { phone, lastMessageAt: t, labels: labelsArr, optIn: data.optIn === true });
+
+            byPhoneAll.set(phone, {
+              phone,
+              lastMessageAt: t,
+              labels: labelsArr,
+              optIn: data.optIn === true,
+              marketingOptIn: data.marketingOptIn,
+            });
           }
         }
-        const arrAll = Array.from(byPhoneAll.values()).sort((a, b) => (b.lastMessageAt || 0) - (a.lastMessageAt || 0));
-        if (!cancelled) { setTagPhonesAll(arrAll.map(r => r.phone)); setTagMetaAll(arrAll); }
 
+        const allArr = Array.from(byPhoneAll.values()).sort(
+          (a, b) => (b.lastMessageAt || 0) - (a.lastMessageAt || 0)
+        );
+        if (!cancelled) setTagRowsAll(allArr);
       } catch (e) {
         console.error("search convs by labels error:", e);
         if (!cancelled) {
-          setTagPhonesOpt([]); setTagMetaOpt([]);
-          setTagPhonesAll([]); setTagMetaAll([]);
+          setTagRowsSendable([]);
+          setTagRowsOptInAll([]);
+          setTagRowsAll([]);
         }
-      } finally { if (!cancelled) setTagPhonesLoading(false); }
+      } finally {
+        if (!cancelled) setTagPhonesLoading(false);
+      }
     })();
-    return () => { cancelled = true; };
-  }, [selectedLabels]);
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedLabels, currentUid]);
 
-  useEffect(() => { if (destMode === "tags" && mode === "csv") setMode("global"); }, [destMode, mode]);
+  useEffect(() => {
+    if (destMode === "tags" && mode === "csv") setMode("global");
+  }, [destMode, mode]);
+
+  useEffect(() => {
+    if (destMode !== "tags") return;
+    setSelectedTagPhones(tagRowsSendable.map((r) => r.phone));
+  }, [tagRowsSendable, destMode]);
 
   const totalToSend = useMemo(() => {
-    if (destMode === "tags") return tagPhonesOpt.length; // envío SIEMPRE opt-in
-    return (mode === "global" ? numbers.length : csvPreview.length);
-  }, [destMode, tagPhonesOpt.length, mode, numbers.length, csvPreview.length]);
+    if (destMode === "tags") return sendPhones.length;
+    return mode === "global" ? numbers.length : csvPreview.length;
+  }, [destMode, sendPhones.length, mode, numbers.length, csvPreview.length]);
 
   const hasLockedTemplate = Boolean(tpl);
 
@@ -360,19 +545,27 @@ export default function RemarketingBulk({ onClose }) {
   const canSend = useMemo(() => {
     if (!hasLockedTemplate) return false;
     if (!confirmOptIn || !confirmTemplate) return false;
+
     if (destMode === "tags") {
       if (varCount <= 0) return false;
-      // Permite vacío en var1 (idx 0). El resto obligatorio.
-      return totalToSend > 0 && vars.slice(0, varCount).every((v, i) => i === 0 ? true : String(v || "").length > 0);
+      return totalToSend > 0 && vars.slice(0, varCount).every((v, i) => (i === 0 ? true : String(v || "").length > 0));
     }
+
     if (mode === "global") {
-      return numbers.length > 0 && vars.slice(0, varCount).every((v, i) => i === 0 ? true : String(v || "").length > 0);
+      return numbers.length > 0 && vars.slice(0, varCount).every((v, i) => (i === 0 ? true : String(v || "").length > 0));
     }
+
     if (mode === "csv") {
-      return csvPreview.length > 0 && csvPreview.every((r) => r.phone &&
-        Array.from({ length: varCount }, (_, i) => r[`v${i + 1}`]).every((x, i) => i === 0 ? true : (x ?? "").length > 0)
+      return (
+        csvPreview.length > 0 &&
+        csvPreview.every(
+          (r) =>
+            r.phone &&
+            Array.from({ length: varCount }, (_, i) => r[`v${i + 1}`]).every((x, i) => (i === 0 ? true : (x ?? "").length > 0))
+        )
       );
     }
+
     return false;
   }, [hasLockedTemplate, confirmOptIn, confirmTemplate, destMode, totalToSend, mode, numbers, vars, csvPreview, varCount]);
 
@@ -388,25 +581,24 @@ export default function RemarketingBulk({ onClose }) {
         if (i === 0) {
           const v = String(t || "").trim();
           const fb = v ? v : fallbackForVar1FromTemplateBody(tplBody);
-          out = fb === "" ? "\u200B" : fb; // anti “Hola Hola”
+          out = fb === "" ? "\u200B" : fb;
         } else {
           out = String(t || "");
         }
         if (out.length > MAX_PARAM_LEN) out = out.slice(0, MAX_PARAM_LEN - 1) + "…";
-        // ⬇️ Saneo final requerido por Meta
         out = sanitizeParamText(out);
         return out;
       });
 
-    const list = destMode === "tags"
-      ? tagPhonesOpt.map((phone) => ({ phone, vars: applyFallbackVars(vars) }))
-      : (mode === "global"
-        ? numbers.map((phone) => ({ phone, vars: applyFallbackVars(vars) }))
-        : csvPreview.map((r) => ({
+    const list =
+      destMode === "tags"
+        ? sendPhones.map((phone) => ({ phone, vars: applyFallbackVars(vars) }))
+        : mode === "global"
+          ? numbers.map((phone) => ({ phone, vars: applyFallbackVars(vars) }))
+          : csvPreview.map((r) => ({
             phone: r.phone,
-            vars: applyFallbackVars(Array.from({ length: varCount }, (_, i) => r[`v${i + 1}`]))
-          }))
-      );
+            vars: applyFallbackVars(Array.from({ length: varCount }, (_, i) => r[`v${i + 1}`])),
+          }));
 
     setRowsState(list.map((x) => ({ phone: x.phone, status: "pending" })));
     setProgress({ sent: 0, ok: 0, fail: 0 });
@@ -414,19 +606,23 @@ export default function RemarketingBulk({ onClose }) {
     for (let i = 0; i < list.length; i++) {
       const { phone, vars } = list[i];
       try {
-        const components = [{
-          type: "body",
-          parameters: vars.map((t) => ({ type: "text", text: String(t) }))
-        }];
+        const components = [
+          {
+            type: "body",
+            parameters: vars.map((t) => ({ type: "text", text: String(t) })),
+          },
+        ];
 
         await sendTemplate({ phone, components });
         setRowsState((prev) => prev.map((r) => (r.phone === phone ? { ...r, status: "ok" } : r)));
         setProgress((p) => ({ sent: p.sent + 1, ok: p.ok + 1, fail: p.fail }));
       } catch (err) {
-        setRowsState((prev) => prev.map((r) => (r.phone === phone ? { ...r, status: "fail", error: String(err?.message || err) } : r)));
+        setRowsState((prev) =>
+          prev.map((r) => (r.phone === phone ? { ...r, status: "fail", error: String(err?.message || err) } : r))
+        );
         setProgress((p) => ({ sent: p.sent + 1, ok: p.ok, fail: p.fail + 1 }));
       }
-      
+
       await sleep(delayMs || 800);
     }
 
@@ -434,330 +630,603 @@ export default function RemarketingBulk({ onClose }) {
   };
 
   return (
-    <div className="max-w-5xl p-4 mx-auto">
-    <div className="flex items-center gap-3 mb-3">
-  <button
-  type="button"
-  className="btn btn-sm btn-ghost"
-  onClick={onClose}
->
-  ← Volver
-</button>
-  <h2 className="text-2xl font-bold">📣 Remarketing por Plantilla (WhatsApp)</h2>
-</div>
-      <h2 className="mb-2 text-2xl font-bold">📣 Remarketing por Plantilla (WhatsApp)</h2>
-      <p className="mb-1 text-sm text-gray-600">
-        Este módulo usa <b>solo</b> la plantilla aprobada <code>{LOCKED_TEMPLATE}</code> ({LOCKED_LANG}) y envía únicamente a contactos con <b>opt-in</b>.
-      </p>
-      {senderInfo && (
-        <p className="mb-4 text-xs text-gray-600">
-          Se enviará desde <b>Phone ID</b>: <code>{senderInfo.phoneId}</code> (env: <code>{senderInfo.phoneEnvKey}</code>) — vendedor: <code>{senderInfo.seller?.email}</code>
-        </p>
-      )}
-
-      {/* Plantilla */}
-      <div className="p-3 mb-4 space-y-2 border rounded-lg">
-        <label className="block text-sm font-semibold">Plantilla</label>
-        <div className="grid gap-2 md:grid-cols-2">
-          <div>
-            <span className="block text-xs text-gray-600">Idioma</span>
-            <div className="w-full p-2 border rounded bg-gray-50">{LOCKED_LANG}</div>
-          </div>
-          <div>
-            <span className="block text-xs text-gray-600">Plantilla aprobada (MARKETING)</span>
-            <div className="w-full p-2 border rounded bg-gray-50">
-              {tpl ? `${LOCKED_TEMPLATE} · ${LOCKED_LANG}` : "(no disponible / no aprobada)"}
+    <div className="modal modal-open" onClick={onClose}>
+      <div
+        className="modal-box w-11/12 max-w-6xl p-0 overflow-hidden bg-base-200 text-base-content"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="sticky top-0 z-20 border-b border-base-300 bg-base-200/90 backdrop-blur">
+          <div className="flex items-center justify-between gap-3 px-4 py-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="flex items-center justify-center w-10 h-10 rounded-2xl bg-base-300">
+                <span className="text-xl">📣</span>
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-base md:text-lg font-bold truncate">
+                  Remarketing por Plantilla (WhatsApp)
+                </h2>
+                <p className="text-xs opacity-70 truncate">
+                  Solo envía a contactos <b>enviables</b> y además podés elegir manualmente a quién enviar.
+                </p>
+              </div>
             </div>
-          </div>
-        </div>
 
-        {tplBody && tpl && (
-          <div className="p-2 text-sm border rounded bg-gray-50">
-            <div className="font-mono whitespace-pre-wrap">{tplBody}</div>
-            <div className="mt-1 text-gray-500">
-              Variables detectadas en BODY: {varCount} &nbsp;
-              ({Array.from({ length: varCount }).map((_, i) => `{{${i + 1}}}`).join(", ")})
-            </div>
-            <div className="mt-1 text-xs text-gray-500">
-              Si <code>{'{{1}}'}</code> viene vacío, se enviará: <b>{getTimeGreeting()}</b> (o vacío si el cuerpo ya comienza con "Hola " + {'{{1}}'} + "").
-            </div>
-          </div>
-        )}
-
-        {!tpl && (
-          <div className="p-2 text-sm text-red-700 border border-red-300 rounded bg-red-50">
-            La plantilla <b>{LOCKED_TEMPLATE}</b> ({LOCKED_LANG}) no aparece como <b>APPROVED / MARKETING</b>.
-            Aprobala en tu WABA y recargá esta página.
-          </div>
-        )}
-      </div>
-
-      {/* Variables */}
-      <div className="p-3 mb-4 space-y-2 border rounded-lg">
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="text-sm font-semibold">Variables</span>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="radio" name="mode" value="global" checked={mode === "global"} onChange={() => setMode("global")} />
-            Mismas para todos
-          </label>
-          {destMode === "manual" && (
-            <label className="flex items-center gap-2 text-sm">
-              <input type="radio" name="mode" value="csv" checked={mode === "csv"} onChange={() => setMode("csv")} />
-              Por fila (CSV)
-            </label>
-          )}
-        </div>
-        {mode === "global" ? (
-          <div className="grid gap-2 md:grid-cols-3">
-            {Array.from({ length: varCount }).map((_, idx) => (
-              idx === 2 ? (
-                <textarea
-                  key={idx}
-                  rows={6}
-                  className="p-2 font-mono whitespace-pre-wrap border rounded md:col-span-3"
-                  placeholder="Pegá 1 combo por línea. Ej:&#10;Impermeabilizante 20L + Rodillo + Venda $49.900&#10;Látex 20L + 2 Enduidos $39.900"
-                  value={vars[idx] || ""}
-                  onChange={(e) => { const v = [...vars]; v[idx] = e.target.value; setVars(v); }}
-                />
-              ) : (
-                <input
-                  key={idx}
-                  className="p-2 border rounded"
-                  placeholder={`{{${idx + 1}}} ${idx === 0 ? '(opcional: nombre o saludo)' : ''}`}
-                  value={vars[idx] || ""}
-                  onChange={(e) => { const v = [...vars]; v[idx] = e.target.value; setVars(v); }}
-                />
-              )
-            ))}
-          </div>
-        ) : (
-          <div className="space-y-2">
             <div className="flex items-center gap-2">
-              <input type="file" accept=".csv" ref={fileInputRef} onChange={(e) => onCsvUpload(e.target.files?.[0])} />
-              <button type="button" className="px-3 py-1 border rounded" onClick={() => fileInputRef.current?.click()}>Cargar CSV</button>
+              <button type="button" className="btn btn-sm btn-ghost" onClick={onClose}>
+                ✕
+              </button>
             </div>
-            <p className="text-xs text-gray-600">Formato: <code>phone,var1,var2,...</code> — <b>v1 puede ir vacío</b> (usa “buen día / buenas tardes / buenas noches” automáticamente).</p>
-            {csvPreview.length > 0 && (
-              <div className="overflow-auto text-sm border rounded max-h-40">
-                <table className="w-full">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="p-1 text-left">phone</th>
-                      {Array.from({ length: varCount }).map((_, i) => (<th key={i} className="p-1 text-left">v{i + 1}</th>))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {csvPreview.map((r, i) => (
-                      <tr key={i} className="odd:bg-white even:bg-gray-50">
-                        <td className="p-1 font-mono">{r.phone}</td>
-                        {Array.from({ length: varCount }).map((_, j) => (<td key={j} className="p-1">{r[`v${j + 1}`]}</td>))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+          </div>
+
+          {/* Subheader / Info */}
+          <div className="px-4 pb-3">
+            <div className="alert bg-base-300/60 border border-base-300 py-2">
+              <div className="text-sm leading-snug">
+                Este módulo usa <b>solo</b> la plantilla aprobada{" "}
+                <code className="px-1 py-0.5 rounded bg-base-200 border border-base-300">
+                  {LOCKED_TEMPLATE}
+                </code>{" "}
+                (<code className="px-1 py-0.5 rounded bg-base-200 border border-base-300">{LOCKED_LANG}</code>) y envía únicamente a:
+                <span className="ml-2">
+                  <code className="px-1 py-0.5 rounded bg-base-200 border border-base-300">optIn=true</code>{" "}
+                  +{" "}
+                  <code className="px-1 py-0.5 rounded bg-base-200 border border-base-300">
+                    marketingOptIn=true
+                  </code>{" "}
+                  (o ausente por legado)
+                </span>
+              </div>
+            </div>
+
+            {senderInfo && (
+              <div className="mt-2 text-xs opacity-70">
+                Se enviará desde <b>Phone ID</b>:{" "}
+                <code className="px-1 py-0.5 rounded bg-base-300 border border-base-300">
+                  {senderInfo.phoneId}
+                </code>{" "}
+                (env:{" "}
+                <code className="px-1 py-0.5 rounded bg-base-300 border border-base-300">
+                  {senderInfo.phoneEnvKey}
+                </code>
+                ) — vendedor:{" "}
+                <code className="px-1 py-0.5 rounded bg-base-300 border border-base-300">
+                  {senderInfo.seller?.email}
+                </code>
               </div>
             )}
           </div>
-        )}
-      </div>
-
-      {/* Destinatarios */}
-      <div className="p-3 mb-4 space-y-2 border rounded-lg">
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="text-sm font-semibold">Destinatarios</span>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="radio" name="dest" value="tags" checked={destMode === "tags"} onChange={() => setDestMode("tags")} />
-            Por etiquetas
-          </label>
         </div>
 
-        {destMode === "tags" ? (
-          <div className="space-y-2">
-            <LabelsBlock
-              labelsLoading={labelsLoading}
-              labelsError={labelsError}
-              allLabels={allLabels}
-              selectedLabels={selectedLabels}
-              setSelectedLabels={setSelectedLabels}
-            />
+        {/* Body scroll */}
+        <div className="p-4 space-y-4 max-h-[78vh] overflow-auto">
+          {/* Plantilla */}
+          <section className="card bg-base-100 border border-base-300 shadow-sm">
+            <div className="card-body p-4">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="font-semibold">Plantilla</h3>
+                <div className="badge badge-ghost">
+                  {tpl ? "Disponible" : "No disponible"}
+                </div>
+              </div>
 
-            <div className="text-xs text-gray-600">
-              Seleccionadas: {selectedLabels.length} ·
-              {" "}Con opt-in: {tagPhonesOpt.length}
-              {" "}({tagPhonesAll.length} total)
+              <div className="grid gap-3 md:grid-cols-2 mt-2">
+                <div className="space-y-1">
+                  <div className="text-xs opacity-70">Idioma</div>
+                  <div className="px-3 py-2 rounded-lg bg-base-200 border border-base-300 font-mono text-sm">
+                    {LOCKED_LANG}
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <div className="text-xs opacity-70">Plantilla aprobada (MARKETING)</div>
+                  <div className="px-3 py-2 rounded-lg bg-base-200 border border-base-300 font-mono text-sm">
+                    {tpl ? `${LOCKED_TEMPLATE} · ${LOCKED_LANG}` : "(no disponible / no aprobada)"}
+                  </div>
+                </div>
+              </div>
+
+              {tplBody && tpl && (
+                <div className="mt-3 p-3 rounded-xl bg-base-200 border border-base-300">
+                  <div className="font-mono whitespace-pre-wrap text-sm">{tplBody}</div>
+                  <div className="mt-2 text-xs opacity-70">
+                    Variables detectadas en BODY: <b>{varCount}</b>{" "}
+                    <span className="ml-1 font-mono">
+                      ({Array.from({ length: varCount }).map((_, i) => `{{${i + 1}}}`).join(", ")})
+                    </span>
+                  </div>
+                  <div className="mt-1 text-xs opacity-70">
+                    Si <code className="px-1 py-0.5 rounded bg-base-100 border border-base-300">{"{{1}}"}</code> viene vacío, se enviará:{" "}
+                    <b>{getTimeGreeting()}</b> (o vacío si el cuerpo ya comienza con <i>Hola + {"{{1}}"}</i>).
+                  </div>
+                </div>
+              )}
+
+              {!tpl && (
+                <div className="alert alert-error mt-3">
+                  <span>
+                    La plantilla <b>{LOCKED_TEMPLATE}</b> ({LOCKED_LANG}) no aparece como <b>APPROVED / MARKETING</b>. Aprobala en tu WABA y recargá.
+                  </span>
+                </div>
+              )}
             </div>
+          </section>
 
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={includeNoOptIn}
-                onChange={(e) => setIncludeNoOptIn(e.target.checked)}
-              />
-              Ver coincidencias <b>sin</b> opt-in (solo vista previa)
-            </label>
+          {/* Variables */}
+          <section className="card bg-base-100 border border-base-300 shadow-sm">
+            <div className="card-body p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h3 className="font-semibold">Variables</h3>
 
-            {tagPhonesLoading ? (
-              <div className="text-sm text-gray-600">Buscando conversaciones…</div>
-            ) : (includeNoOptIn ? tagMetaAll.length : tagMetaOpt.length) > 0 ? (
-              <>
-                <PreviewTable rows={includeNoOptIn ? tagMetaAll : tagMetaOpt} />
+                <div className="join">
+                  <label className="btn btn-sm join-item">
+                    <input
+                      type="radio"
+                      name="mode"
+                      className="radio radio-sm mr-2"
+                      value="global"
+                      checked={mode === "global"}
+                      onChange={() => setMode("global")}
+                    />
+                    Mismas para todos
+                  </label>
 
-                <div className="flex flex-wrap items-center gap-2 mt-2">
-                  <button
-                    type="button"
-                    className="px-3 py-1 text-sm border rounded"
-                    onClick={() => setShowNumbers((v) => !v)}
-                  >
-                    {showNumbers ? "Ocultar números" : `Ver números (${(includeNoOptIn ? tagMetaAll.length : tagMetaOpt.length)})`}
-                  </button>
+                  {destMode === "manual" && (
+                    <label className="btn btn-sm join-item">
+                      <input
+                        type="radio"
+                        name="mode"
+                        className="radio radio-sm mr-2"
+                        value="csv"
+                        checked={mode === "csv"}
+                        onChange={() => setMode("csv")}
+                      />
+                      Por fila (CSV)
+                    </label>
+                  )}
+                </div>
+              </div>
 
-                  <button
-                    type="button"
-                    className="px-3 py-1 text-sm border rounded"
-                    onClick={copyNumbersAnnotated}
-                    title="Copia teléfono + estado (lo mismo que ves)"
-                  >
-                    Copiar con estado
-                  </button>
+              {mode === "global" ? (
+                <div className="grid gap-3 md:grid-cols-2 mt-3">
+                  {Array.from({ length: varCount }).map((_, idx) => (
+                    <div key={idx} className={idx >= 2 ? "md:col-span-2" : ""}>
+                      <label className="text-xs opacity-70">
+                        {getVarLabel(idx)}
+                      </label>
+                      <input
+                        className="input input-bordered w-full mt-1 bg-base-200 border-base-300"
+                        placeholder={getVarPlaceholder(idx)}
+                        value={vars[idx] || ""}
+                        onChange={(e) => {
+                          const v = [...vars];
+                          v[idx] = e.target.value;
+                          setVars(v);
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-3 space-y-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="file"
+                      accept=".csv"
+                      ref={fileInputRef}
+                      className="file-input file-input-bordered file-input-sm bg-base-200 border-base-300"
+                      onChange={(e) => onCsvUpload(e.target.files?.[0])}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-outline"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      Cargar CSV
+                    </button>
+                  </div>
 
-                  <button
-                    type="button"
-                    className="px-3 py-1 text-sm border rounded"
-                    onClick={copyOnlyOptIn}
-                    title="Copia solo los teléfonos que tienen opt-in=true"
-                  >
-                    Copiar solo números (opt-in)
-                  </button>
+                  <div className="text-xs opacity-70">
+                    Formato: <code className="px-1 py-0.5 rounded bg-base-200 border border-base-300">phone,var1,var2,var3,var4,var5,var6</code> —{" "}
+                    <b>v1 puede ir vacío</b> (usa “buen día / buenas tardes / buenas noches”).
+                  </div>
+
+                  {csvPreview.length > 0 && (
+                    <div className="overflow-auto rounded-xl border border-base-300 max-h-56">
+                      <table className="table table-zebra table-sm">
+                        <thead>
+                          <tr>
+                            <th>phone</th>
+                            {Array.from({ length: varCount }).map((_, i) => (
+                              <th key={i}>{`v${i + 1}`}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {csvPreview.map((r, i) => (
+                            <tr key={i}>
+                              <td className="font-mono">{r.phone}</td>
+                              {Array.from({ length: varCount }).map((_, j) => (
+                                <td key={j}>{r[`v${j + 1}`]}</td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
+
+          {/* Destinatarios */}
+          <section className="card bg-base-100 border border-base-300 shadow-sm">
+            <div className="card-body p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h3 className="font-semibold">Destinatarios</h3>
+
+                <div className="join">
+                  <label className="btn btn-sm join-item">
+                    <input
+                      type="radio"
+                      name="dest"
+                      className="radio radio-sm mr-2"
+                      value="tags"
+                      checked={destMode === "tags"}
+                      onChange={() => setDestMode("tags")}
+                    />
+                    Por etiquetas
+                  </label>
+                </div>
+              </div>
+
+              {destMode === "tags" ? (
+                <div className="mt-3 space-y-3">
+                  <LabelsBlock
+                    labelsLoading={labelsLoading}
+                    labelsError={labelsError}
+                    allLabels={allLabels}
+                    selectedLabels={selectedLabels}
+                    setSelectedLabels={setSelectedLabels}
+                  />
+
+                  <div className="text-xs opacity-70">
+                    Seleccionadas: <b>{selectedLabels.length}</b> · Enviables:{" "}
+                    <b>{tagRowsSendable.length}</b> · Marcados para enviar:{" "}
+                    <b>{sendRows.length}</b>{" "}
+                    <span className="opacity-70">
+                      (optIn: {tagRowsOptInAll.length} · total: {tagRowsAll.length})
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap gap-4">
+                    <label className="label cursor-pointer justify-start gap-2">
+                      <input
+                        type="checkbox"
+                        className="checkbox checkbox-sm"
+                        checked={includeNoMarketingOptIn}
+                        onChange={(e) => setIncludeNoMarketingOptIn(e.target.checked)}
+                        disabled={includeNoOptIn}
+                      />
+                      <span className="label-text">
+                        Ver coincidencias con <b>marketingOptIn=false</b> (solo vista previa)
+                      </span>
+                    </label>
+
+                    <label className="label cursor-pointer justify-start gap-2">
+                      <input
+                        type="checkbox"
+                        className="checkbox checkbox-sm"
+                        checked={includeNoOptIn}
+                        onChange={(e) => setIncludeNoOptIn(e.target.checked)}
+                      />
+                      <span className="label-text">
+                        Ver coincidencias <b>sin</b> opt-in (solo vista previa)
+                      </span>
+                    </label>
+                  </div>
+
+                  {tagPhonesLoading ? (
+                    <div className="flex items-center gap-2 text-sm opacity-70">
+                      <span className="loading loading-spinner loading-sm"></span>
+                      Buscando conversaciones…
+                    </div>
+                  ) : previewRows.length > 0 ? (
+                    <>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-outline"
+                          onClick={selectAllSendable}
+                          disabled={!tagRowsSendable.length}
+                        >
+                          Seleccionar todos los enviables
+                        </button>
+
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          onClick={clearSelectedSendable}
+                          disabled={!selectedTagPhones.length}
+                        >
+                          Limpiar selección
+                        </button>
+                      </div>
+
+                      <div className="alert bg-base-300/60 border border-base-300 py-2">
+                        <span className="text-sm">
+                          Se enviará únicamente a <b>{sendRows.length}</b> contactos seleccionados.
+                        </span>
+                      </div>
+
+                      <PreviewTable
+                        rows={previewRows}
+                        selectedPhones={selectedTagPhones}
+                        onTogglePhone={toggleTagPhone}
+                        sendablePhones={tagRowsSendable.map((r) => r.phone)}
+                      />
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-outline"
+                          onClick={() => setShowNumbers((v) => !v)}
+                        >
+                          {showNumbers ? "Ocultar números" : `Ver números (${previewRows.length})`}
+                        </button>
+
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          onClick={copyNumbersAnnotated}
+                          title="Copia teléfono + estado"
+                        >
+                          Copiar con estado
+                        </button>
+
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          onClick={copyOnlySendable}
+                          title="Copia solo los teléfonos seleccionados para enviar"
+                        >
+                          Copiar solo números seleccionados
+                        </button>
+                      </div>
+
+                      {showNumbers && (
+                        <textarea
+                          readOnly
+                          className="textarea textarea-bordered w-full min-h-[160px] font-mono text-sm bg-base-200 border-base-300"
+                          value={numbersText}
+                          placeholder="No hay coincidencias para las etiquetas seleccionadas."
+                        />
+                      )}
+                    </>
+                  ) : (
+                    <div className="text-sm opacity-70">Elegí 1+ etiquetas para listar destinatarios.</div>
+                  )}
+                </div>
+              ) : null}
+            </div>
+          </section>
+
+          {/* Cumplimiento */}
+          <section className="card bg-base-100 border border-base-300 shadow-sm">
+            <div className="card-body p-4 space-y-2">
+              <h3 className="font-semibold">Cumplimiento</h3>
+
+              <label className="label cursor-pointer justify-start gap-3">
+                <input
+                  type="checkbox"
+                  className="checkbox checkbox-sm"
+                  checked={confirmOptIn}
+                  onChange={(e) => setConfirmOptIn(e.target.checked)}
+                />
+                <span className="label-text">
+                  Confirmo que los contactos tienen permiso para recibir <b>marketing</b> (o modo legado) y se respeta opt-out.
+                </span>
+              </label>
+
+              <label className="label cursor-pointer justify-start gap-3">
+                <input
+                  type="checkbox"
+                  className="checkbox checkbox-sm"
+                  checked={confirmTemplate}
+                  onChange={(e) => setConfirmTemplate(e.target.checked)}
+                />
+                <span className="label-text">
+                  Confirmo que usaré <b>la plantilla aprobada</b> por Meta.
+                </span>
+              </label>
+            </div>
+          </section>
+
+          {/* Resultado por número */}
+          {rowsState.length > 0 && (
+            <section className="card bg-base-100 border border-base-300 shadow-sm">
+              <div className="card-body p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="font-semibold">Resultado por número</h3>
+                  <div className="badge badge-ghost">{rowsState.length}</div>
                 </div>
 
-                {showNumbers && (
-                  <textarea
-                    readOnly
-                    className="mt-2 w-full min-h-[160px] font-mono text-sm border rounded p-2"
-                    value={numbersText}
-                    placeholder="No hay coincidencias para las etiquetas seleccionadas."
-                  />
-                )}
-              </>
-            ) : (
-              <div className="text-sm text-gray-600">Elegí 1+ etiquetas para listar destinatarios.</div>
-            )}
-          </div>
-        ) : null}
-      </div>
+                <div className="overflow-auto rounded-xl border border-base-300 max-h-96 mt-3">
+                  <table className="table table-zebra table-sm">
+                    <thead>
+                      <tr>
+                        <th>Teléfono</th>
+                        <th>Estado</th>
+                        <th>Detalle</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rowsState.map((r) => (
+                        <tr key={r.phone}>
+                          <td className="font-mono">{r.phone}</td>
+                          <td>
+                            {r.status === "pending"
+                              ? "⏳ Enviando"
+                              : r.status === "ok"
+                                ? "✅ OK"
+                                : "❌ Error"}
+                          </td>
+                          <td className="opacity-80">{r.error || ""}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
 
-      {/* Cumplimiento */}
-      <div className="p-3 mb-4 space-y-1 text-sm border rounded-lg">
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={confirmOptIn} onChange={(e) => setConfirmOptIn(e.target.checked)} />
-          Confirmo que todos los contactos tienen <b>opt-in</b> para recibir mensajes de WhatsApp de este negocio.
-        </label>
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={confirmTemplate} onChange={(e) => setConfirmTemplate(e.target.checked)} />
-          Confirmo que usaré <b>la plantilla aprobada</b> por Meta para este envío.
-        </label>
-      </div>
-
-      {/* Acciones */}
-      <div className="flex flex-wrap items-center gap-2 mb-4">
-        <button
-          type="button"
-          className={`px-4 py-2 rounded text-white ${canSend ? "bg-black" : "bg-gray-400 cursor-not-allowed"}`}
-          disabled={!canSend || sending}
-          onClick={handleSend}
-        >
-          {sending ? "Enviando…" : `Enviar a ${totalToSend} contactos`}
-        </button>
-        {!tpl && (
-          <span className="text-sm text-red-700">No se puede enviar: la plantilla bloqueada aún no está aprobada/visible.</span>
-        )}
-        <label className="flex items-center gap-2 ml-auto text-sm">
-          <span>Delay (ms)</span>
-          <input
-            type="number"
-            min={100}
-            step={100}
-            className="w-24 p-1 border rounded"
-            value={delayMs}
-            onChange={(e) => setDelayMs(parseInt(e.target.value || "800", 10))}
-          />
-        </label>
-      </div>
-
-      {/* Resultado por número */}
-      {rowsState.length > 0 && (
-        <div className="overflow-auto border rounded-lg max-h-80">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="p-2 text-left">Teléfono</th>
-                <th className="p-2 text-left">Estado</th>
-                <th className="p-2 text-left">Detalle</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rowsState.map((r) => (
-                <tr key={r.phone} className="odd:bg-white even:bg-gray-50">
-                  <td className="p-2 font-mono">{r.phone}</td>
-                  <td className="p-2">{r.status === "pending" ? "⏳ Enviando" : r.status === "ok" ? "✅ OK" : "❌ Error"}</td>
-                  <td className="p-2">{r.error || ""}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                <div className="mt-3 text-xs opacity-70 space-y-1">
+                  <p>💡 Tip: si recibís <code className="px-1 py-0.5 rounded bg-base-200 border border-base-300">429 Too Many Requests</code>, aumentá el delay o dividí en tandas.</p>
+                  <p>🔒 Fuera de 24h, <b>solo</b> se pueden enviar <i>template messages</i> aprobados.</p>
+                  <p>🛑 Opt-out: si el usuario manda “BAJA/STOP/NO MÁS…”, queda en <code className="px-1 py-0.5 rounded bg-base-200 border border-base-300">marketingOptIn=false</code>.</p>
+                </div>
+              </div>
+            </section>
+          )}
         </div>
-      )}
 
-      <div className="mt-4 space-y-1 text-xs text-gray-500">
-        <p>💡 Tip: si recibís <code>429 Too Many Requests</code>, aumentá el delay entre envíos o dividí la lista en tandas.</p>
-        <p>🔒 Cumplimiento: fuera de 24h de la última interacción del usuario, <b>solo</b> se puede enviar <i>template messages</i> aprobados, y solo a contactos con opt-in.</p>
+        {/* Footer sticky actions */}
+        <div className="sticky bottom-0 z-20 border-t border-base-300 bg-base-200/90 backdrop-blur">
+          <div className="px-4 py-3 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              className={`btn btn-primary ${(!canSend || sending) ? "btn-disabled" : ""}`}
+              disabled={!canSend || sending}
+              onClick={handleSend}
+            >
+              {sending ? (
+                <>
+                  <span className="loading loading-spinner loading-sm"></span>
+                  Enviando…
+                </>
+              ) : (
+                `Enviar a ${totalToSend} contactos`
+              )}
+            </button>
+
+            {!tpl && (
+              <div className="text-sm text-error">
+                No se puede enviar: la plantilla bloqueada aún no está aprobada/visible.
+              </div>
+            )}
+
+            <div className="ml-auto flex items-center gap-2">
+              <span className="text-sm opacity-70">Delay</span>
+              <input
+                type="number"
+                min={100}
+                step={100}
+                className="input input-bordered input-sm w-24 bg-base-200 border-base-300"
+                value={delayMs}
+                onChange={(e) => setDelayMs(parseInt(e.target.value || "800", 10))}
+              />
+              <span className="text-sm opacity-70">ms</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="modal-backdrop">
+        <button onClick={onClose}>close</button>
       </div>
     </div>
   );
 }
 
 function LabelsBlock({ labelsLoading, labelsError, allLabels, selectedLabels, setSelectedLabels }) {
-  if (labelsLoading) return <div className="text-sm text-gray-600">Cargando etiquetas…</div>;
-  if (labelsError) return <div className="text-sm text-red-600">{labelsError}</div>;
+  if (labelsLoading) {
+    return (
+      <div className="flex items-center gap-2 text-sm opacity-70">
+        <span className="loading loading-spinner loading-sm"></span>
+        Cargando etiquetas…
+      </div>
+    );
+  }
+  if (labelsError) return <div className="text-sm text-error">{labelsError}</div>;
+
   return (
-    <div className="grid gap-2 md:grid-cols-3">
-      {allLabels.map((l) => {
-        const on = selectedLabels.includes(l.slug);
-        return (
-          <label key={l.slug} className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={on}
-              onChange={() => setSelectedLabels((prev) => on ? prev.filter((s) => s !== l.slug) : [...prev, l.slug])}
-            />
-            <span>{l.name || l.slug}</span>
-          </label>
-        );
-      })}
+    <div className="rounded-xl border border-base-300 bg-base-200 p-3">
+      <div className="grid gap-2 md:grid-cols-3">
+        {allLabels.map((l) => {
+          const on = selectedLabels.includes(l.slug);
+          return (
+            <label key={l.slug} className="label cursor-pointer justify-start gap-2">
+              <input
+                type="checkbox"
+                className="checkbox checkbox-sm"
+                checked={on}
+                onChange={() =>
+                  setSelectedLabels((prev) => (on ? prev.filter((s) => s !== l.slug) : [...prev, l.slug]))
+                }
+              />
+              <span className="label-text">{l.name || l.slug}</span>
+            </label>
+          );
+        })}
+      </div>
     </div>
   );
 }
-function PreviewTable({ rows }) {
+
+function PreviewTable({ rows, selectedPhones = [], onTogglePhone, sendablePhones = [] }) {
+  const fmtMkt = (v) => (v === false ? "✗" : v === true ? "✓" : "○");
+
+  const selectedSet = useMemo(() => new Set(selectedPhones), [selectedPhones]);
+  const sendableSet = useMemo(() => new Set(sendablePhones), [sendablePhones]);
+
   return (
-    <div className="overflow-auto border rounded max-h-40">
-      <table className="w-full text-sm">
-        <thead className="bg-gray-50">
+    <div className="overflow-auto rounded-xl border border-base-300">
+      <table className="table table-zebra table-sm">
+        <thead>
           <tr>
-            <th className="p-1 text-left">Teléfono (E.164)</th>
-            <th className="p-1 text-left">Último mensaje</th>
-            <th className="p-1 text-left">Etiquetas</th>
-            <th className="p-1 text-left">Opt-in</th>
+            <th>Enviar</th>
+            <th>Teléfono (E.164)</th>
+            <th>Último mensaje</th>
+            <th>Etiquetas</th>
+            <th>Opt-in</th>
+            <th>Marketing</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
-            <tr key={r.phone} className="odd:bg-white even:bg-gray-50">
-              <td className="p-1 font-mono">{r.phone}</td>
-              <td className="p-1">{r.lastMessageAt ? new Date(r.lastMessageAt).toLocaleString() : "—"}</td>
-              <td className="p-1">{(Array.isArray(r.labels) ? r.labels : []).join(", ")}</td>
-              <td className="p-1">{r.optIn ? "✓" : "—"}</td>
-            </tr>
-          ))}
+          {rows.map((r) => {
+            const selectable = sendableSet.has(r.phone);
+            const checked = selectedSet.has(r.phone);
+
+            return (
+              <tr key={r.phone} className={!selectable ? "opacity-60" : ""}>
+                <td>
+                  <input
+                    type="checkbox"
+                    className="checkbox checkbox-sm"
+                    checked={checked}
+                    disabled={!selectable}
+                    onChange={() => onTogglePhone?.(r.phone)}
+                    title={
+                      selectable
+                        ? "Incluir en el envío"
+                        : "No enviable por reglas de opt-in / marketing"
+                    }
+                  />
+                </td>
+
+                <td className="font-mono">{r.phone}</td>
+
+                <td className="opacity-80">
+                  {r.lastMessageAt ? new Date(r.lastMessageAt).toLocaleString() : "—"}
+                </td>
+
+                <td className="opacity-80">
+                  {(Array.isArray(r.labels) ? r.labels : []).join(", ")}
+                </td>
+
+                <td>{r.optIn ? "✓" : "—"}</td>
+                <td>{fmtMkt(r.marketingOptIn)}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

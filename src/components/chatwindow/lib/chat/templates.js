@@ -1,9 +1,11 @@
 import { getSellerDisplayName } from "./seller.js";
+import { sanitizeParamText } from "./text.js";
 
 export const COMBOS_TEMPLATE_NAME = "promo_hogarcril_combos";
 export const COMBOS_TEMPLATE_LANG = "es_AR";
 
-export const REENGAGE_TEMPLATE = import.meta.env.VITE_WA_REENGAGE_TEMPLATE || "reengage_free_text";
+export const REENGAGE_TEMPLATE =
+    import.meta.env.VITE_WA_REENGAGE_TEMPLATE || "reengage_free_text";
 export const REENGAGE_LANG = import.meta.env.VITE_WA_REENGAGE_LANG || "es_AR";
 
 export function combosTimeGreeting(d = new Date()) {
@@ -13,22 +15,37 @@ export function combosTimeGreeting(d = new Date()) {
     return "buenas noches";
 }
 
-export function buildReengageTemplate({ contact, sellerUser, rawWebhookSnapshot }) {
+export function buildReengageTemplate({
+    contact,
+    sellerUser,
+    rawWebhookSnapshot,
+    freeText,
+}) {
     const waProfile =
-        rawWebhookSnapshot?.entry?.[0]?.changes?.[0]?.value?.contacts?.[0]?.profile?.name || "";
+        rawWebhookSnapshot?.entry?.[0]?.changes?.[0]?.value?.contacts?.[0]?.profile
+            ?.name || "";
 
     const crm = (contact?.displayName || contact?.name || "").trim();
     const client = (crm || waProfile || "\u200B").trim();
 
-    const p1 = client || "\u200B";
-    const p2 = getSellerDisplayName(sellerUser);
-    const p3 = "HogarCril";
+    const p1 = sanitizeParamText(client || "\u200B");
+    const p2 = sanitizeParamText(getSellerDisplayName(sellerUser) || "\u200B");
+
+    const ft = String(freeText || "").trim();
+    const p3 = sanitizeParamText(ft ? ft : "HogarCril");
 
     return {
         name: REENGAGE_TEMPLATE,
         language: { code: REENGAGE_LANG },
         components: [
-            { type: "body", parameters: [{ type: "text", text: p1 }, { type: "text", text: p2 }, { type: "text", text: p3 }] },
+            {
+                type: "body",
+                parameters: [
+                    { type: "text", text: p1 },
+                    { type: "text", text: p2 },
+                    { type: "text", text: p3 },
+                ],
+            },
         ],
     };
 }

@@ -105,7 +105,7 @@ export default function QuickRepliesBar({ onPick, compact = false }) {
             <button
               key={i}
               type="button"
-              className="text-black rounded-full border btn btn-xs bg-base-200 border-base-300 hover:bg-base-100"
+              className="text-white rounded-full border btn btn-xs bg-base-200 border-base-300 hover:bg-base-100"
               onClick={() => onPick?.(t)}
               title={t}
             >

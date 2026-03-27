@@ -1,75 +1,173 @@
 /* Tailwind v4 + DaisyUI v5 */
 @import "tailwindcss";
 
-/* Habilitá daisyui y definí 2 temas: claro y oscuro opcional */
+/* ✅ Tema oscuro por defecto */
 @plugin "daisyui" {
-  themes: crm --default, crm-dark;
+  themes: crm-dark --default, crm;
 }
 
-/* ===== Tema claro ===== */
+/* ===== Tema claro (igual al tuyo) ===== */
 @plugin "daisyui/theme" {
   name: "crm";
   color-scheme: light;
 
-  /* Colores de marca */
-  --color-primary:           #2563eb; /* azul */
-  --color-primary-content:   #ffffff;
+  --color-primary: #2563eb;
+  --color-primary-content: #ffffff;
 
-  --color-secondary:         #0ea5e9; /* celeste */
+  --color-secondary: #0ea5e9;
   --color-secondary-content: #0b1220;
 
-  --color-accent:            #10b981; /* verde */
-  --color-accent-content:    #062319;
+  --color-accent: #10b981;
+  --color-accent-content: #062319;
 
-  /* Neutrales y fondos */
-  --color-neutral:           #0f172a; /* slate-900 p/ textos fuertes */
-  --color-base-100:          #ffffff; /* fondo tarjetas/paneles */
-  --color-base-200:          #f1f5f9; /* hover / listas */
-  --color-base-300:          #e5e7eb;
+  --color-base-100: #f8fafc;
+  --color-base-200: #f1f5f9;
+  --color-base-300: #e2e8f0;
 
-  /* Estado */
-  --color-info:              #38bdf8;
-  --color-success:           #16a34a;
-  --color-warning:           #f59e0b;
-  --color-error:             #ef4444;
+  --color-base-content: #0f172a;
 
-  /* Radios y sombras más “suaves” */
+  --color-neutral: #0f172a;
+  --color-neutral-content: #ffffff;
+
+  --color-info: #38bdf8;
+  --color-success: #16a34a;
+  --color-warning: #f59e0b;
+  --color-error: #ef4444;
+
   --radius-box: 14px;
   --radius-btn: 12px;
   --radius-field: 12px;
 }
 
-
+/* ===== TEMA OSCURO ESTILO WHATSAPP ===== */
 @plugin "daisyui/theme" {
   name: "crm-dark";
   color-scheme: dark;
 
-  --color-primary:           #60a5fa;
-  --color-primary-content:   #0a1220;
+  /* ✅ Fondo real tipo WhatsApp */
+  --root-bg: #0b141a;
 
-  --color-secondary:         #22d3ee;
-  --color-accent:            #34d399;
+  /* ✅ Capas */
+  --color-base-100: #202c33;
+  /* superficies (header / bubbles entrantes / paneles) */
+  --color-base-200: #111b21;
+  /* secundarios (composer outer / chips / hover) */
+  --color-base-300: #2a3942;
+  /* bordes / separadores */
 
-  --color-neutral:           #e5e7eb;
-  --color-base-100:          #0b1220;
-  --color-base-200:          #111828;
-  --color-base-300:          #1f2937;
+  /* Texto */
+  --color-base-content: #e9edef;
 
-  --color-info:              #38bdf8;
-  --color-success:           #4ade80;
-  --color-warning:           #fbbf24;
-  --color-error:             #f87171;
+  /* Accentos */
+  --color-primary: #00a884;
+  /* verde WhatsApp */
+  --color-primary-content: #062a22;
+
+  --color-secondary: #53bdeb;
+  /* links/acciones */
+  --color-secondary-content: #061018;
+
+  --color-accent: #8696a0;
+  /* gris WhatsApp */
+  --color-accent-content: #0b141a;
+
+  /* ✅ Importante: SUCCESS lo usás para burbuja "Yo" */
+  --color-success: #005c4b;
+  /* burbuja saliente WhatsApp */
+  --color-success-content: #e9edef;
+
+  --color-neutral: #8696a0;
+  --color-neutral-content: #0b141a;
+
+  --color-info: #53bdeb;
+  --color-warning: #f0c75e;
+  --color-error: #ef6b7b;
 
   --radius-box: 14px;
   --radius-btn: 12px;
   --radius-field: 12px;
 }
 
+* {
+  box-sizing: border-box;
+}
 
-* { box-sizing: border-box; }
-html, body, #root { height: 100%; margin: 0; }
-body { font-family: ui-sans-serif, system-ui, -apple-system, "Inter", "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif; }
-/* Utilidad: contenedor que permite que hijos con overflow tengan scroll */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Inter", "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+
+  /* ✅ Fondo global WhatsApp */
+  background: var(--root-bg);
+  color: var(--color-base-content);
+}
+
+/* Scroll más WhatsApp */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--root-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-base-300);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3a4a55;
+}
+
+/* Utilidad */
 .min-h-0 {
-  min-height: 0; /* útil con flex/grid parents */
+  min-height: 0;
+}
+
+/* ✅ Tus clases custom del composer (solo colores) */
+.chat-composer-surface {
+  background: var(--color-base-200);
+  border-color: var(--color-base-300);
+}
+
+.chat-composer-capsule {
+  background: var(--color-base-100);
+  border-color: var(--color-base-300);
+}
+
+.chat-composer-menu,
+.chat-composer-popover {
+  background: var(--color-base-100);
+  border-color: var(--color-base-300);
+}
+
+.chat-composer-pill,
+.chat-composer-reply {
+  background: var(--color-base-200);
+  border: 1px solid var(--color-base-300);
+}
+
+.chat-composer-divider {
+  border-color: var(--color-base-300);
+}
+
+.chat-composer-textarea {
+  color: var(--color-base-content);
+  background: transparent;
+}
+
+.chat-composer-textarea::placeholder {
+  color: rgba(233, 237, 239, 0.55);
+}
+
+/* Nativo (audio) más oscuro */
+audio {
+  color-scheme: dark;
 }

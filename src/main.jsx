@@ -6,19 +6,24 @@ import "./index.css";
 
 import LoginPage from "./pages/LoginPage.jsx";
 import RequireAuth from "./components/RequireAuth.jsx";
-import Home from "./pages/home.jsx"; 
+import Home from "./pages/home.jsx";
 
-// Asegura el tema DaisyUI (ya tienes los colores en index.css)
-document.documentElement.setAttribute("data-theme", "crm");
+const THEME_KEY = "crm_theme";
+const DEFAULT_THEME = "crm-dark";
+
+function applyTheme(theme) {
+  const t = theme || DEFAULT_THEME;
+  document.documentElement.setAttribute("data-theme", t);
+  document.documentElement.style.colorScheme = t.includes("dark") ? "dark" : "light";
+}
+
+applyTheme(localStorage.getItem(THEME_KEY));
 
 const router = createBrowserRouter([
   { path: "/", element: <LoginPage /> },
   {
     element: <RequireAuth />,
-    children: [
-      // una sola ruta que matchea /home y /home/:convId
-      { path: "/home/:convId?", element: <Home /> },
-    ],
+    children: [{ path: "/home/:convId?", element: <Home /> }],
   },
 ]);
 

@@ -17,6 +17,8 @@ import {
   documentId,
   startAfter,
   setDoc,
+  startAt,
+  endAt,
 } from "firebase/firestore";
 import { useAuthState } from "../hooks/useAuthState.js";
 import LabelChips from "./LabelChips.jsx";
@@ -27,8 +29,46 @@ function formatShort(ts) {
   return d ? d.toLocaleString() : "";
 }
 
+
+/** Normaliza texto para búsqueda: lower + sin tildes + espacios colapsados */
+const foldText = (s) =>
+  String(s ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+
+/** "rodolfo carlos paz" -> "Rodolfo Carlos Paz" */
+const toTitleCase = (s) =>
+  String(s ?? "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .split(" ")
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1).toLowerCase() : ""))
+    .join(" ");
+
+
 /** Normaliza slugs */
 const normSlug = (s) => String(s ?? "").trim().toLowerCase();
+
+/** ======== Filtro Córdoba vs Villa María ======== */
+const CORDOBA_WA_PHONE_IDS = new Set([
+  "807747825759387", // Christian
+  "729326663073216", // Camila
+  "834087939786971", // Juli
+]);
+
+const CORDOBA_EMAILS = new Set([
+  "christian15366@gmail.com",
+  "lunacami00@gmail.com",
+  "julicisneros.89@gmail.com",
+]);
+
+const getConvWaPhoneId = (c) =>
+  String(c?.lastInboundPhoneId || c?.lastInboundPhoneID || c?.waPhoneId || "").trim();
+
+const isCordobaConv = (c) => CORDOBA_WA_PHONE_IDS.has(getConvWaPhoneId(c));
 
 /** Chunk helper */
 function chunk(array, size = 10) {
@@ -70,13 +110,13 @@ function avatarTheme(seed) {
   };
 }
 
-/** Skeleton */
+/** Skeleton (DaisyUI) */
 function RowSkeleton() {
   return (
-    <div className="px-4 py-3 border-b border-[#e9edef] bg-white animate-pulse">
-      <div className="w-40 h-3 rounded bg-slate-200" />
-      <div className="w-56 h-2 mt-2 rounded bg-slate-200" />
-      <div className="w-24 h-2 mt-2 rounded bg-slate-200" />
+    <div className="px-4 py-3 border-b border-base-300 bg-base-100 animate-pulse">
+      <div className="w-40 h-3 rounded skeleton" />
+      <div className="w-56 h-2 mt-2 rounded skeleton" />
+      <div className="w-24 h-2 mt-2 rounded skeleton" />
     </div>
   );
 }
@@ -84,7 +124,29 @@ function RowSkeleton() {
 export default function ConversationsList({ activeId, onSelect }) {
   const { user } = useAuthState();
 
-  // ======= Estilos locales (WhatsApp-ish) =======
+  // ✅ Este componente es SOLO para Córdoba.
+  // Christian / Camila / Juli ven solo conversaciones de sus números de Córdoba.
+  // Todo lo de Villa María queda bloqueado.
+  const currentEmail = useMemo(
+    () => String(user?.email || "").trim().toLowerCase(),
+    [user?.email]
+  );
+
+  const isCordobaUser = useMemo(
+    () => CORDOBA_EMAILS.has(currentEmail),
+    [currentEmail]
+  );
+
+  const isBlockedForMe = (c) => {
+    // si por error entra otro usuario a este componente, no ve nada
+    if (!isCordobaUser) return true;
+
+    // solo se muestran conversaciones cuyo lastInboundPhoneId
+    // corresponda a alguno de los 3 números de Córdoba
+    return !isCordobaConv(c);
+  };
+
+  // ======= Estilos locales (ahora por tokens del theme) =======
   const AttentionStyles = (
     <style>{`
       /* ====== nuevo entrante ====== */
@@ -92,19 +154,21 @@ export default function ConversationsList({ activeId, onSelect }) {
       .new-reply::before {
         content: "";
         position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
-        background: #25D366; animation: pulseBar 1.15s ease-in-out infinite;
+        background: var(--color-primary);
+        animation: pulseBar 1.15s ease-in-out infinite;
         border-top-left-radius: 9999px; border-bottom-left-radius: 9999px;
       }
       @keyframes pulseBar { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
 
       .ping-badge {
         position: relative; width: 10px; height: 10px; border-radius: 9999px;
-        background: #25D366; box-shadow: 0 0 0 2px #e6f9ec;
+        background: var(--color-primary);
+        box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-primary) 18%, var(--color-base-100));
       }
       .ping-badge::after {
         content: ""; position: absolute; inset: 0; border-radius: 9999px;
         animation: ping 1.25s cubic-bezier(0,0,.2,1) infinite;
-        border: 2px solid rgba(37, 211, 102, .45);
+        border: 2px solid color-mix(in oklab, var(--color-primary) 45%, var(--color-base-100));
       }
       @keyframes ping {
         0% { transform: scale(1); opacity: .85; }
@@ -112,47 +176,58 @@ export default function ConversationsList({ activeId, onSelect }) {
         100% { transform: scale(2.1); opacity: 0; }
       }
 
-      /* ====== WhatsApp-ish ====== */
-      .wa-shell { background: #f0f2f5; }
-      .wa-border { border-color: #d1d7db; }
-      .wa-row-border { border-color: #e9edef; }
+      /* ====== Shell / borders (theme-aware) ====== */
+      .wa-shell { background: var(--root-bg, var(--color-base-200)); }
+      .wa-border { border-color: var(--color-base-300); }
+      .wa-row-border { border-color: color-mix(in oklab, var(--color-base-300) 70%, transparent); }
 
-      .wa-row { background: #ffffff; position: relative; }
-      .wa-row:hover { background: #f5f6f6; }
-      .wa-row.wa-active { background: #d9fdd3; }
+      /* ====== Rows ====== */
+      .wa-row { background: var(--color-base-100); color: var(--color-base-content); position: relative; }
+      .wa-row:hover { background: var(--color-base-200); }
+      .wa-row.wa-active {
+        background: color-mix(in oklab, var(--color-primary) 18%, var(--color-base-100));
+      }
 
       /* ✅ Mis chats (asignados a mí): más notorios */
-      .wa-row.wa-mine { background: #ecfff2; }
-      .wa-row.wa-mine:hover { background: #e3ffec; }
+      .wa-row.wa-mine {
+        background: color-mix(in oklab, var(--color-success) 14%, var(--color-base-100));
+      }
+      .wa-row.wa-mine:hover {
+        background: color-mix(in oklab, var(--color-success) 18%, var(--color-base-200));
+      }
       .wa-row.wa-mine::after{
         content:"";
         position:absolute; right:0; top:0; bottom:0; width:3px;
-        background:#25D366; opacity:.9;
+        background: var(--color-primary);
+        opacity:.9;
         border-top-left-radius:9999px; border-bottom-left-radius:9999px;
       }
 
-      .wa-time { color: #667781; font-size: 11px; }
-      .wa-time.wa-unread { color: #25D366; font-weight: 800; }
+      .wa-time {
+        color: color-mix(in oklab, var(--color-base-content) 58%, var(--color-base-100));
+        font-size: 11px;
+      }
+      .wa-time.wa-unread { color: var(--color-primary); font-weight: 800; }
 
       .wa-pill {
         font-size: 10px;
         padding: 2px 8px;
         border-radius: 9999px;
-        border: 1px solid #d1d7db;
-        color: #111b21;
-        background: #ffffff;
+        border: 1px solid var(--color-base-300);
+        color: color-mix(in oklab, var(--color-base-content) 88%, var(--color-base-100));
+        background: var(--color-base-100);
         line-height: 1.2;
         white-space: nowrap;
       }
       .wa-pill-mine{
-        border-color:#25D366;
-        color:#0b3d1f;
-        background:#d9fdd3;
-        font-weight:800;
+        border-color: var(--color-primary);
+        background: color-mix(in oklab, var(--color-primary) 16%, var(--color-base-100));
+        color: var(--color-base-content);
+        font-weight: 800;
       }
       .wa-pill-other{
-        color:#667781;
-        background:#f0f2f5;
+        background: var(--color-base-200);
+        color: color-mix(in oklab, var(--color-base-content) 60%, var(--color-base-100));
       }
 
       /* ✅ Acciones secundarias: aparecen al hover en desktop */
@@ -183,11 +258,36 @@ export default function ConversationsList({ activeId, onSelect }) {
   const [quickFilter, setQuickFilter] = useState("all");
 
   // ==========================================
-  //   ETIQUETAS (TODAS, SIN PAGINACIÓN)
+  //   ETIQUETAS (carga progresiva)
   // ==========================================
   const [labelsAll, setLabelsAll] = useState([]);
-  const [labelsLoading, setLabelsLoading] = useState(false);
+  const [labelsLoading, setLabelsLoading] = useState(false); // solo "initial blocking" (mientras está vacío)
+  const [labelsBackfilling, setLabelsBackfilling] = useState(false); // sigue cargando en background
   const [labelsError, setLabelsError] = useState("");
+
+  // caches internos para backfill (no afectan otras lógicas)
+  const labelsLoadedIdsRef = useRef(new Set());
+  const labelsContactsCacheRef = useRef({});
+
+  // ==========================================
+  // ✅ BUSCADOR GLOBAL (remote Firestore)
+  // ==========================================
+  const [searchDebounced, setSearchDebounced] = useState("");
+  const [remoteSearchItems, setRemoteSearchItems] = useState([]);
+  const [remoteSearchLoading, setRemoteSearchLoading] = useState(false);
+  const [remoteSearchError, setRemoteSearchError] = useState("");
+  const searchReqIdRef = useRef(0);
+  const searchContactsCacheRef = useRef({}); // cache de contacts para resultados remotos
+
+  useEffect(() => {
+    const s = String(search || "").trim();
+    if (!s) {
+      setSearchDebounced("");
+      return;
+    }
+    const t = setTimeout(() => setSearchDebounced(s), 220);
+    return () => clearTimeout(t);
+  }, [search]);
 
   // ==================================================
   // ✅ Scroll restore tipo WhatsApp
@@ -315,7 +415,7 @@ export default function ConversationsList({ activeId, onSelect }) {
     return () => {
       try {
         saveScrollState();
-      } catch { }
+      } catch (e){console.error("Error saving scroll state on unmount:", e);}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollKey]);
@@ -505,6 +605,14 @@ export default function ConversationsList({ activeId, onSelect }) {
       next.sort((a, b) => tsToMillis(b.lastMessageAt) - tsToMillis(a.lastMessageAt));
       return next;
     });
+
+    // si estás buscando remoto, también parchea ahí (no rompe nada)
+    setRemoteSearchItems((prev) => {
+      if (!Array.isArray(prev) || prev.length === 0) return prev;
+      const next = prev.map((c) => (String(c.id) === convId ? { ...c, ...patch } : c));
+      next.sort((a, b) => tsToMillis(b.lastMessageAt) - tsToMillis(a.lastMessageAt));
+      return next;
+    });
   };
 
   // =========================
@@ -547,9 +655,7 @@ export default function ConversationsList({ activeId, onSelect }) {
           if (ids.length > 0) {
             const chunksArr = chunk(ids, 10);
             const results = await Promise.all(
-              chunksArr.map((ids10) =>
-                getDocs(query(collection(db, "contacts"), where(documentId(), "in", ids10)))
-              )
+              chunksArr.map((ids10) => getDocs(query(collection(db, "contacts"), where(documentId(), "in", ids10))))
             );
             for (const res of results) {
               res.forEach((docSnap) => {
@@ -689,17 +795,18 @@ export default function ConversationsList({ activeId, onSelect }) {
   // =========================
   const isStarred = (c) => (Array.isArray(c.stars) && user?.uid ? c.stars.includes(user.uid) : false);
 
-  const isAdmin =
-    !!user?.email && ["federudiero@gmail.com", "fede_rudiero@gmail.com"].includes(user.email);
+  const isAdmin = !!user?.email && ["federudiero@gmail.com", "fede_rudiero@gmail.com"].includes(user.email);
 
   const canDelete = (c) => {
     if (!user?.uid) return false;
+    if (isBlockedForMe(c)) return false;
     if (isAdmin) return true;
     return c.assignedToUid === user.uid;
   };
 
   const toggleStar = async (c) => {
     if (!user?.uid) return;
+    if (isBlockedForMe(c)) return;
     const ref = doc(db, "conversations", c.id);
     try {
       if (isStarred(c)) await updateDoc(ref, { stars: arrayRemove(user.uid) });
@@ -712,6 +819,7 @@ export default function ConversationsList({ activeId, onSelect }) {
 
   const assignToMe = async (c) => {
     if (!user) return;
+    if (isBlockedForMe(c)) return;
     const ref = doc(db, "conversations", c.id);
     try {
       await runTransaction(db, async (tx) => {
@@ -741,6 +849,7 @@ export default function ConversationsList({ activeId, onSelect }) {
 
   const unassign = async (c) => {
     if (!user?.uid) return;
+    if (isBlockedForMe(c)) return;
     const ref = doc(db, "conversations", c.id);
 
     try {
@@ -788,7 +897,7 @@ export default function ConversationsList({ activeId, onSelect }) {
     }
   };
 
-  const canOpen = (c) => !c.assignedToUid || c.assignedToUid === user?.uid;
+  const canOpen = (c) => !isBlockedForMe(c) && (!c.assignedToUid || c.assignedToUid === user?.uid);
 
   const isUnread = (c) => {
     if (!canOpen(c)) return false;
@@ -968,16 +1077,16 @@ export default function ConversationsList({ activeId, onSelect }) {
     const theme = useMemo(() => avatarTheme(seed), [seed]);
 
     return (
-      <div className="w-10 h-10 rounded-full shrink-0 overflow-hidden border wa-border flex items-center justify-center bg-white">
+      <div className="flex items-center justify-center w-10 h-10 overflow-hidden border rounded-full shrink-0 wa-border bg-base-100">
         {src && ok ? (
           <img
             src={src}
             alt={String(display)}
-            className="w-full h-full object-cover"
+            className="object-cover w-full h-full"
             onError={() => setOk(false)}
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center" style={{ background: theme.bg }}>
+          <div className="flex items-center justify-center w-full h-full" style={{ background: theme.bg }}>
             <span className="text-xs font-bold" style={{ color: theme.fg }}>
               {getInitials(display)}
             </span>
@@ -987,33 +1096,251 @@ export default function ConversationsList({ activeId, onSelect }) {
     );
   };
 
+  // ==========================================
+  // ✅ BUSCADOR GLOBAL (remote Firestore)
+  // ==========================================
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchContactsByIds(ids) {
+      const missing = ids.filter((id) => !searchContactsCacheRef.current[String(id)]);
+      if (missing.length === 0) return;
+
+      for (const ids10 of chunk(missing, 10)) {
+        const res = await getDocs(query(collection(db, "contacts"), where(documentId(), "in", ids10)));
+        res.forEach((docSnap) => {
+          searchContactsCacheRef.current[String(docSnap.id)] = docSnap.data();
+        });
+        if (cancelled) return;
+      }
+    }
+
+    async function fetchConversationsByIds(ids) {
+      const out = [];
+      for (const ids10 of chunk(ids, 10)) {
+        const res = await getDocs(query(collection(db, "conversations"), where(documentId(), "in", ids10)));
+        res.forEach((d) => out.push({ id: d.id, ...d.data(), contact: null }));
+        if (cancelled) return [];
+      }
+      return out;
+    }
+
+    function buildPhonePrefixes(raw, digits) {
+      const prefixes = new Set();
+      const s = String(raw || "").trim();
+      if (!s) return [];
+
+      const cleanedPlus = s.startsWith("+") ? "+" + s.slice(1).replace(/\D+/g, "") : null;
+      if (cleanedPlus && cleanedPlus.length >= 4) prefixes.add(cleanedPlus);
+
+      const d = String(digits || "");
+      if (d.length >= 3) {
+        // si ya incluye país (54...), probamos +digits
+        if (d.startsWith("54")) prefixes.add("+" + d);
+
+        // heurísticas comunes AR
+        prefixes.add("+54" + d);
+        prefixes.add("+549" + d);
+
+        // si el usuario ya pegó algo tipo 549...
+        if (d.startsWith("549")) prefixes.add("+" + d);
+
+        // último fallback: "+" + digits a secas
+        prefixes.add("+" + d);
+      }
+
+      // filtrar basura (muy cortos)
+      return Array.from(prefixes).filter((p) => typeof p === "string" && p.length >= 5).slice(0, 5);
+    }
+
+    async function queryConversationsByIdPrefix(prefix, lim = 30) {
+      const qRef = query(
+        collection(db, "conversations"),
+        orderBy(documentId()),
+        startAt(prefix),
+        endAt(prefix + "\uf8ff"),
+        limit(lim)
+      );
+      const snap = await getDocs(qRef);
+      return snap.docs.map((d) => ({ id: d.id, ...d.data(), contact: null }));
+    }
+
+    async function queryContactsByNamePrefix(field, prefix, lim = 40) {
+      const qRef = query(
+        collection(db, "contacts"),
+        orderBy(field),
+        startAt(prefix),
+        endAt(prefix + "\uf8ff"),
+        limit(lim)
+      );
+      const snap = await getDocs(qRef);
+      const ids = [];
+      snap.forEach((d) => {
+        ids.push(d.id);
+        searchContactsCacheRef.current[String(d.id)] = d.data(); // cachear
+      });
+      return ids;
+    }
+
+    async function runRemoteSearch() {
+      if (tab === "etiquetas") return;
+      if (!user?.uid) return;
+
+      const qRaw = String(searchDebounced || "").trim();
+      if (!qRaw) {
+        setRemoteSearchItems([]);
+        setRemoteSearchError("");
+        setRemoteSearchLoading(false);
+        return;
+      }
+
+      const reqId = ++searchReqIdRef.current;
+      setRemoteSearchLoading(true);
+      setRemoteSearchError("");
+
+      try {
+        const qRawTrim = String(qRaw || "").trim();
+        const qLower = qRawTrim.toLowerCase();
+        const qFold = foldText(qRawTrim);
+        const qTitle = toTitleCase(qRawTrim);
+        const digits = onlyDigits(qRawTrim);
+
+        const wantPhone = digits.length >= 3;
+        const wantName = qFold.length >= 2;
+
+        const map = new Map();
+
+        // 1) Buscar por teléfono / docId prefix (conversations)
+        if (wantPhone) {
+          const prefixes = buildPhonePrefixes(qRaw, digits);
+          const phoneSnaps = await Promise.all(prefixes.map((p) => queryConversationsByIdPrefix(p, 35)));
+          for (const arr of phoneSnaps) {
+            for (const c of arr) map.set(String(c.id), c);
+          }
+        }
+
+        // 2) Buscar por nombre (contacts -> ids -> conversations)
+        // Recomendado: contacts.nameLower (case-insensitive)
+        if (wantName) {
+          let contactIds = [];
+
+          // 2.a) Mejor opción (si existe): nameLower
+          try {
+            const idsLower = await queryContactsByNamePrefix("nameLower", qLower, 45);
+            contactIds.push(...idsLower);
+          } catch (e) {
+            console.warn("remote search nameLower failed:", e);
+          }
+
+          // 2.b) Opcional (si lo tenés): nameFold (sin tildes)
+          try {
+            const idsFold = await queryContactsByNamePrefix("nameFold", qFold, 45);
+            contactIds.push(...idsFold);
+          } catch (e) {console.warn("remote search nameFold failed:", e);
+            // si no existe el campo, no pasa nada
+            // console.warn("remote search nameFold failed:", e);
+          }
+
+          // 2.c) Fallback: contacts.name (CASE-SENSITIVE) pero probamos variantes
+          // Esto soluciona el caso: "rodolfo" -> "Rodolfo ..."
+          try {
+            const variants = Array.from(new Set([qRawTrim, qTitle].filter(Boolean))).slice(0, 2);
+            for (const v of variants) {
+              const idsName = await queryContactsByNamePrefix("name", v, 35);
+              contactIds.push(...idsName);
+            }
+          } catch (e) {
+            console.warn("remote search name failed:", e);
+          }
+
+          // dedupe + cap
+          contactIds = Array.from(new Set(contactIds)).slice(0, 60);
+
+          if (contactIds.length > 0) {
+            const convs = await fetchConversationsByIds(contactIds);
+            for (const c of convs) map.set(String(c.id), c);
+          }
+        }
+
+        // armar lista final
+        let list = Array.from(map.values());
+
+        // filtro seguridad + deleted
+        list = list.filter((c) => !c.deletedAt && !isBlockedForMe(c));
+
+        // cargar contactos para los ids (por si vinieron de conversations)
+        const ids = list.map((c) => String(c.id));
+        await fetchContactsByIds(ids);
+        if (cancelled || reqId !== searchReqIdRef.current) return;
+
+        // adjuntar contactos
+        list = list.map((c) => ({
+          ...c,
+          contact: searchContactsCacheRef.current[String(c.id)] || c.contact || null,
+        }));
+
+        // vistos
+        await loadSeenFor(ids);
+
+        // ordenar
+        list.sort((a, b) => tsToMillis(b.lastMessageAt) - tsToMillis(a.lastMessageAt));
+
+        if (cancelled || reqId !== searchReqIdRef.current) return;
+        setRemoteSearchItems(list);
+      } catch (err) {
+        console.error("remote search error:", err);
+        if (!cancelled) setRemoteSearchError("No se pudo buscar en la base completa.");
+      } finally {
+        if (!cancelled) setRemoteSearchLoading(false);
+      }
+    }
+
+    runRemoteSearch();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchDebounced, tab, user?.uid]);
+
   // =========================
   // Buscar por texto + excluir eliminados
   // =========================
+  const baseItemsForSearch = useMemo(() => {
+    if (tab === "etiquetas") return items; // no aplica
+    if (!searchDebounced.trim()) return items;
+    return remoteSearchItems;
+  }, [tab, searchDebounced, remoteSearchItems, items]);
+
   const filteredByText = useMemo(() => {
-    const qText = search.trim().toLowerCase();
-    const base = items.filter((c) => !c.deletedAt);
+    const qText = foldText(searchDebounced);
+    const qDigits = onlyDigits(searchDebounced);
+
+    const base = baseItemsForSearch.filter((c) => !c.deletedAt && !isBlockedForMe(c));
     if (!qText) return base;
 
     return base.filter((c) => {
-      const name = String(getDisplayName(c) || "").toLowerCase();
-      const id = String(c.id || "").toLowerCase();
-      const phone = String(c.contact?.phone || c.contactId || "").toLowerCase();
-      const lastText = String(c.lastMessageText || "").toLowerCase();
-      const labels = Array.isArray(c.labels) ? c.labels.join(" ").toLowerCase() : "";
-      const assigned = String(c.assignedToName || c.assignedToUid || "").toLowerCase();
+      const name = foldText(getDisplayName(c) || "");
+      const id = foldText(c.id || "");
+      const phone = foldText(c.contact?.phone || c.contactId || "");
+      const lastText = foldText(c.lastMessageText || "");
+      const labels = foldText(Array.isArray(c.labels) ? c.labels.join(" ") : "");
+      const assigned = foldText(c.assignedToName || c.assignedToUid || "");
 
+      const phoneDigits = onlyDigits(c.contact?.phone || c.contactId || "");
+      const idDigits = onlyDigits(c.id || "");
       return (
         name.includes(qText) ||
         id.includes(qText) ||
         phone.includes(qText) ||
         lastText.includes(qText) ||
         labels.includes(qText) ||
-        assigned.includes(qText)
+        assigned.includes(qText) ||
+        (qDigits.length >= 3 && (phoneDigits.includes(qDigits) || idDigits.includes(qDigits)))
       );
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, search]);
+  }, [baseItemsForSearch, searchDebounced]);
 
   // Filtros por tab
   const filtered = useMemo(() => {
@@ -1046,60 +1373,167 @@ export default function ConversationsList({ activeId, onSelect }) {
   }, [filtered, quickFilter, tab, seenTick, user?.uid]);
 
   // ==========================================
-  //   ETIQUETAS (TODAS, SIN PAGINACIÓN)
+  //   ETIQUETAS (carga rápida 10 días + backfill incremental)
   // ==========================================
   useEffect(() => {
     let cancelled = false;
-    async function loadAllForLabels() {
-      if (tab !== "etiquetas" || !user?.uid) return;
-      setLabelsLoading(true);
-      setLabelsError("");
-      try {
-        const pageLim = 200;
-        const qBase = query(collection(db, "conversations"), orderBy("lastMessageAt", "desc"), limit(pageLim));
 
-        let out = [];
-        let last = null;
-        while (true) {
-          const qRef = last ? query(qBase, startAfter(last)) : qBase;
-          const snap = await getDocs(qRef);
-          if (snap.empty) break;
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-          const rows = snap.docs.map((d) => ({ id: d.id, ...d.data(), contact: null }));
-          const mine = rows.filter((c) => !c.deletedAt && c.assignedToUid === user.uid);
-          out.push(...mine);
-
-          last = snap.docs[snap.docs.length - 1];
-          if (snap.size < pageLim) break;
-          if (out.length > 10000) break;
-          if (cancelled) return;
-        }
-
-        const ids = out.map((r) => r.id);
-        let contactsById = {};
-        for (const ids10 of chunk(ids, 10)) {
-          const res = await getDocs(query(collection(db, "contacts"), where(documentId(), "in", ids10)));
-          res.forEach((docSnap) => {
-            contactsById[docSnap.id] = docSnap.data();
-          });
-          if (cancelled) return;
-        }
-
-        const withContacts = out.map((r) => ({ ...r, contact: contactsById[r.id] || null }));
-
-        await loadSeenFor(ids);
-
-        withContacts.sort((a, b) => tsToMillis(b.lastMessageAt) - tsToMillis(a.lastMessageAt));
-
-        if (!cancelled) setLabelsAll(withContacts);
-      } catch (err) {
-        console.error("labels loadAll error:", err);
-        if (!cancelled) setLabelsError("No se pudieron cargar todas las etiquetas.");
-      } finally {
-        if (!cancelled) setLabelsLoading(false);
+    async function fetchContactsIntoCache(ids) {
+      if (!Array.isArray(ids) || ids.length === 0) return;
+      for (const ids10 of chunk(ids, 10)) {
+        const res = await getDocs(query(collection(db, "contacts"), where(documentId(), "in", ids10)));
+        res.forEach((docSnap) => {
+          labelsContactsCacheRef.current[String(docSnap.id)] = docSnap.data();
+        });
+        if (cancelled) return;
       }
     }
-    loadAllForLabels();
+
+    function mergeLabelsBatch(rowsWithContacts) {
+      setLabelsAll((prev) => {
+        const map = new Map(prev.map((x) => [String(x.id), x]));
+        for (const r of rowsWithContacts) {
+          const id = String(r.id);
+          map.set(id, { ...(map.get(id) || {}), ...r });
+        }
+        const arr = Array.from(map.values());
+        arr.sort((a, b) => tsToMillis(b.lastMessageAt) - tsToMillis(a.lastMessageAt));
+        return arr;
+      });
+    }
+
+    async function processSnapDocs(docs) {
+      if (!docs || docs.length === 0) return { last: null, addedIds: [] };
+
+      const rows = docs.map((d) => ({ id: d.id, ...d.data(), contact: null }));
+      const mine = rows.filter((c) => !c.deletedAt && c.assignedToUid === user.uid && !isBlockedForMe(c));
+
+      // dedupe global (solo para etiquetas)
+      const added = [];
+      const addedIds = [];
+      for (const c of mine) {
+        const id = String(c.id);
+        if (!labelsLoadedIdsRef.current.has(id)) {
+          labelsLoadedIdsRef.current.add(id);
+          added.push(c);
+          addedIds.push(id);
+        }
+      }
+
+      if (addedIds.length === 0) return { last: docs[docs.length - 1] || null, addedIds: [] };
+
+      // contactos (solo nuevos)
+      const needContacts = addedIds.filter((id) => !labelsContactsCacheRef.current[id]);
+      if (needContacts.length > 0) await fetchContactsIntoCache(needContacts);
+      if (cancelled) return { last: docs[docs.length - 1] || null, addedIds: [] };
+
+      const withContacts = added.map((r) => ({
+        ...r,
+        contact: labelsContactsCacheRef.current[String(r.id)] || null,
+      }));
+
+      mergeLabelsBatch(withContacts);
+
+      // vistos (solo nuevos)
+      await loadSeenFor(addedIds);
+
+      return { last: docs[docs.length - 1] || null, addedIds };
+    }
+
+    async function loadAllForLabelsProgressive() {
+      if (tab !== "etiquetas" || !user?.uid) return;
+
+      // reset
+      setLabelsError("");
+      setLabelsLoading(true);
+      setLabelsBackfilling(false);
+      setLabelsAll([]);
+      labelsLoadedIdsRef.current = new Set();
+      labelsContactsCacheRef.current = {};
+
+      const PAGE_LIM = 200;
+      const RECENT_DAYS = 10;
+      const RECENT_LIM = 300;
+      const maxTotal = 10000;
+
+      const baseColl = collection(db, "conversations");
+
+      let cursor = null;
+
+      try {
+        // 1) PRIMERO: solo últimos 10 días (rápido)
+        const cutoff = new Date(Date.now() - RECENT_DAYS * 24 * 60 * 60 * 1000);
+        try {
+          const qRecent = query(
+            baseColl,
+            where("lastMessageAt", ">=", cutoff),
+            orderBy("lastMessageAt", "desc"),
+            limit(RECENT_LIM)
+          );
+          const snapRecent = await getDocs(qRecent);
+          if (cancelled) return;
+
+          if (!snapRecent.empty) {
+            const res = await processSnapDocs(snapRecent.docs);
+            cursor = res.last;
+          } else {
+            cursor = null;
+          }
+        } catch (e) {
+          // Si falta índice para where+orderBy, caemos a un "primer page" sin where (igual mejora porque mostramos rápido)
+          console.warn("labels recent query fallback:", e);
+          cursor = null;
+        }
+
+        // si no llegó nada por el query reciente (o falló), al menos cargamos la primer page YA
+        if (!cursor && labelsLoadedIdsRef.current.size === 0) {
+          const qFirst = query(baseColl, orderBy("lastMessageAt", "desc"), limit(PAGE_LIM));
+          const snapFirst = await getDocs(qFirst);
+          if (cancelled) return;
+          const res = await processSnapDocs(snapFirst.docs);
+          cursor = res.last;
+        }
+
+        // ya hay algo (o ya intentamos), liberamos la UI
+        if (!cancelled) setLabelsLoading(false);
+
+        // 2) DESPUÉS: backfill incremental (sin bloquear)
+        if (!cancelled) setLabelsBackfilling(true);
+
+        while (!cancelled) {
+          if (labelsLoadedIdsRef.current.size > maxTotal) break;
+
+          const qPage = cursor
+            ? query(baseColl, orderBy("lastMessageAt", "desc"), startAfter(cursor), limit(PAGE_LIM))
+            : query(baseColl, orderBy("lastMessageAt", "desc"), limit(PAGE_LIM));
+
+          const snap = await getDocs(qPage);
+          if (cancelled) return;
+          if (snap.empty) break;
+
+          const res = await processSnapDocs(snap.docs);
+          cursor = res.last;
+
+          if (snap.size < PAGE_LIM) break;
+
+          // ceder el hilo para que el UI respire (clave)
+          await sleep(0);
+        }
+      } catch (err) {
+        console.error("labels progressive load error:", err);
+        if (!cancelled) setLabelsError("No se pudieron cargar todas las etiquetas.");
+      } finally {
+        if (!cancelled) {
+          setLabelsLoading(false);
+          setLabelsBackfilling(false);
+        }
+      }
+    }
+
+    loadAllForLabelsProgressive();
+
     return () => {
       cancelled = true;
     };
@@ -1107,11 +1541,7 @@ export default function ConversationsList({ activeId, onSelect }) {
   }, [tab, user?.uid]);
 
   const baseForLabels =
-    tab === "etiquetas"
-      ? labelsAll
-      : user?.uid
-        ? filtered.filter((c) => c.assignedToUid === user?.uid)
-        : [];
+    tab === "etiquetas" ? labelsAll : user?.uid ? filtered.filter((c) => c.assignedToUid === user?.uid) : [];
 
   const labelsIndex = useMemo(() => {
     const map = new Map();
@@ -1154,10 +1584,10 @@ export default function ConversationsList({ activeId, onSelect }) {
       {AttentionStyles}
 
       {/* Header superior */}
-      <div className="sticky top-0 z-10 border-b wa-border bg-[#f0f2f5]/95 backdrop-blur-sm">
+      <div className="sticky top-0 z-10 border-b wa-border bg-base-200/95 backdrop-blur-sm">
         <div className="flex flex-wrap items-center gap-3 px-3 py-2">
           {/* Tabs */}
-          <div className="flex overflow-x-auto max-w-full rounded-2xl bg-white border wa-border shadow-sm">
+          <div className="flex max-w-full overflow-x-auto border shadow-sm rounded-2xl bg-base-100 wa-border">
             {[
               ["todos", "Todos"],
               ["mios", "Mis chats"],
@@ -1168,7 +1598,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                 key={key}
                 className={
                   "px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-semibold whitespace-nowrap rounded-2xl transition-all " +
-                  (tab === key ? "bg-[#25D366] text-[#0b3d1f] shadow-sm" : "text-[#111b21] hover:bg-[#f0f2f5]")
+                  (tab === key ? "bg-primary text-primary-content shadow-sm" : "text-base-content hover:bg-base-200")
                 }
                 onClick={() => setTab(key)}
               >
@@ -1180,9 +1610,9 @@ export default function ConversationsList({ activeId, onSelect }) {
           {/* Búsqueda */}
           <div className="flex items-center flex-1 min-w-[150px]">
             <div className="relative w-full">
-              <span className="absolute inset-y-0 flex items-center text-sm left-3 text-[#667781]">🔍</span>
+              <span className="absolute inset-y-0 flex items-center text-sm left-3 opacity-70">🔍</span>
               <input
-                className="w-full pl-8 pr-3 py-1.5 text-sm rounded-xl border wa-border bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-[#25D366]/60"
+                className="w-full pl-8 pr-3 py-1.5 text-sm rounded-xl border wa-border bg-base-100 text-base-content shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
                 placeholder="Buscar nombre o número…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -1200,13 +1630,13 @@ export default function ConversationsList({ activeId, onSelect }) {
                   className={
                     "px-3 py-1 text-[11px] font-semibold rounded-full border shadow-sm transition-colors " +
                     (quickFilter === "unassigned"
-                      ? "bg-[#25D366] text-[#0b3d1f] border-[#25D366]"
-                      : "bg-white text-[#111b21] border-[#d1d7db] hover:bg-[#f0f2f5]")
+                      ? "bg-primary text-primary-content border-primary"
+                      : "bg-base-100 text-base-content border-base-300 hover:bg-base-200")
                   }
                   title="Mostrar solo las conversaciones sin asignar"
                 >
                   Sin asignar
-                  <span className="ml-2 px-2 py-0.5 rounded-full bg-black/10">{unassignedCount}</span>
+                  <span className="ml-2 px-2 py-0.5 rounded-full bg-base-300 bg-opacity-40">{unassignedCount}</span>
                 </button>
               )}
 
@@ -1216,19 +1646,19 @@ export default function ConversationsList({ activeId, onSelect }) {
                 className={
                   "px-3 py-1 text-[11px] font-semibold rounded-full border shadow-sm transition-colors " +
                   (quickFilter === "unread"
-                    ? "bg-[#25D366] text-[#0b3d1f] border-[#25D366]"
-                    : "bg-white text-[#111b21] border-[#d1d7db] hover:bg-[#f0f2f5]")
+                    ? "bg-primary text-primary-content border-primary"
+                    : "bg-base-100 text-base-content border-base-300 hover:bg-base-200")
                 }
                 title="Mostrar solo conversaciones con mensajes no leídos"
               >
                 No leídos
-                <span className="ml-2 px-2 py-0.5 rounded-full bg-black/10">{unreadCount}</span>
+                <span className="ml-2 px-2 py-0.5 rounded-full bg-base-300 bg-opacity-40">{unreadCount}</span>
               </button>
 
               {quickFilter !== "all" && (
                 <button
                   onClick={() => setQuickFilter("all")}
-                  className="px-3 py-1 text-[11px] font-semibold rounded-full border border-[#d1d7db] bg-white hover:bg-[#f0f2f5]"
+                  className="px-3 py-1 text-[11px] font-semibold rounded-full border border-base-300 bg-base-100 hover:bg-base-200"
                   title="Quitar filtro"
                 >
                   ✕
@@ -1237,19 +1667,30 @@ export default function ConversationsList({ activeId, onSelect }) {
             </div>
           )}
 
+          {/* Estado búsqueda global */}
+          {tab !== "etiquetas" && searchDebounced.trim() && (
+            <div className="ml-auto text-[11px]">
+              {remoteSearchError ? (
+                <span className="badge badge-error badge-outline">{remoteSearchError}</span>
+              ) : remoteSearchLoading ? (
+                <span className="badge badge-warning badge-outline">Buscando en la base…</span>
+              ) : (
+                <span className="badge badge-success badge-outline">Resultados ({remoteSearchItems.length})</span>
+              )}
+            </div>
+          )}
+
           {/* Estado etiquetas */}
           {tab === "etiquetas" && (
             <div className="ml-auto text-[11px]">
-              {labelsLoading ? (
-                <span className="px-2 py-1 border rounded-full bg-amber-50 text-amber-700 border-amber-200">
-                  Cargando etiquetas…
-                </span>
-              ) : labelsError ? (
-                <span className="text-red-600">{labelsError}</span>
+              {labelsError ? (
+                <span className="badge badge-error badge-outline">{labelsError}</span>
+              ) : labelsLoading && labelsAll.length === 0 ? (
+                <span className="badge badge-warning badge-outline">Cargando etiquetas…</span>
+              ) : labelsBackfilling ? (
+                <span className="badge badge-warning badge-outline">Cargando más etiquetas… ({labelsAll.length})</span>
               ) : (
-                <span className="px-2 py-1 border rounded-full bg-emerald-50 text-emerald-700 border-emerald-200">
-                  Etiquetas cargadas ({labelsAll.length})
-                </span>
+                <span className="badge badge-success badge-outline">Etiquetas cargadas ({labelsAll.length})</span>
               )}
             </div>
           )}
@@ -1260,7 +1701,7 @@ export default function ConversationsList({ activeId, onSelect }) {
       <div ref={listScrollRef} onScroll={onListScroll} className="flex-1 overflow-y-auto">
         {tab !== "etiquetas" ? (
           <>
-            {loading && (
+            {(loading || (searchDebounced.trim() && remoteSearchLoading && remoteSearchItems.length === 0)) && (
               <>
                 <RowSkeleton />
                 <RowSkeleton />
@@ -1301,15 +1742,15 @@ export default function ConversationsList({ activeId, onSelect }) {
                   >
                     <div className="flex items-start justify-between gap-3">
                       {/* info cliente */}
-                      <div className="flex items-start gap-3 flex-1 min-w-0">
+                      <div className="flex items-start flex-1 min-w-0 gap-3">
                         <Avatar c={c} />
 
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 min-w-0">
+                          <div className="flex items-center min-w-0 gap-2">
                             <div
                               className={
                                 "font-mono text-sm truncate " +
-                                (isMine ? "font-extrabold text-[#0b3d1f]" : "font-semibold text-[#111b21]")
+                                (isMine ? "font-extrabold text-primary" : "font-semibold text-base-content")
                               }
                             >
                               {getDisplayName(c)}
@@ -1322,10 +1763,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                             )}
 
                             {!isMine && c.assignedToUid && (
-                              <span
-                                className="wa-pill wa-pill-other"
-                                title={`Asignado a ${c.assignedToName || c.assignedToUid}`}
-                              >
+                              <span className="wa-pill wa-pill-other" title={`Asignado a ${c.assignedToName || c.assignedToUid}`}>
                                 OCUPADA
                               </span>
                             )}
@@ -1334,20 +1772,13 @@ export default function ConversationsList({ activeId, onSelect }) {
                           </div>
 
                           {c.lastMessageText && (
-                            <div
-                              className={
-                                "mt-1 text-xs line-clamp-2 " +
-                                (isMine ? "text-[#111b21] font-medium" : "text-[#667781]")
-                              }
-                            >
+                            <div className={"mt-1 text-xs line-clamp-2 " + (isMine ? "text-base-content font-medium" : "opacity-70")}>
                               {c.lastMessageText}
                             </div>
                           )}
 
-                          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-                            <span className={"wa-time " + (showNew ? "wa-unread" : "")}>
-                              {formatShort(c.lastMessageAt)}
-                            </span>
+                          <div className="flex flex-wrap items-center mt-1 gap-x-2 gap-y-1">
+                            <span className={"wa-time " + (showNew ? "wa-unread" : "")}>{formatShort(c.lastMessageAt)}</span>
 
                             {(c.contact?.phone || c.contactId) && (
                               <span className="wa-pill" title="Número">
@@ -1360,16 +1791,16 @@ export default function ConversationsList({ activeId, onSelect }) {
                             <LabelChips slugs={slugs} />
                           </div>
 
-                          <div className="mt-1 text-[11px] text-[#667781]">
+                          <div className="mt-1 text-[11px] opacity-70">
                             {c.assignedToUid ? (
                               <span>
                                 Asignado a{" "}
-                                <b className="text-[#111b21]">
+                                <b className="text-base-content">
                                   {c.assignedToUid === user?.uid ? "mí" : c.assignedToName || c.assignedToUid}
                                 </b>
                               </span>
                             ) : (
-                              <span className="italic text-[#667781]">Sin asignar</span>
+                              <span className="italic opacity-70">Sin asignar</span>
                             )}
                           </div>
                         </div>
@@ -1385,14 +1816,14 @@ export default function ConversationsList({ activeId, onSelect }) {
                                 e.stopPropagation();
                                 await unassign(c);
                               }}
-                              className="px-3 py-1 text-[11px] font-semibold rounded-full bg-[#25D366] text-[#0b3d1f] shadow-sm hover:brightness-95 border border-[#25D366]"
+                              className="px-3 py-1 text-[11px] font-semibold rounded-full bg-primary text-primary-content shadow-sm hover:brightness-95 border border-primary"
                               title="Desasignarme"
                             >
                               Yo ✓
                             </button>
                           ) : c.assignedToUid ? (
                             <button
-                              className="px-3 py-1 text-[11px] font-semibold rounded-full bg-[#f0f2f5] text-[#667781] border border-[#d1d7db] cursor-not-allowed"
+                              className="px-3 py-1 text-[11px] font-semibold rounded-full bg-base-200 opacity-60 border border-base-300 cursor-not-allowed"
                               disabled
                               onClick={(e) => e.stopPropagation()}
                               title={`Asignada a ${c.assignedToName || "otro agente"}`}
@@ -1405,7 +1836,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                                 e.stopPropagation();
                                 assignToMe(c);
                               }}
-                              className="px-3 py-1 text-[11px] font-semibold rounded-full bg-[#25D366] text-[#0b3d1f] border border-[#25D366] shadow-sm hover:brightness-95"
+                              className="px-3 py-1 text-[11px] font-semibold rounded-full bg-primary text-primary-content border border-primary shadow-sm hover:brightness-95"
                               title="Asignarme esta conversación"
                             >
                               Asignarme
@@ -1414,7 +1845,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                         </div>
 
                         {/* ✅ ACCIONES SECUNDARIAS SOLO EN HOVER (PC) */}
-                        <div className="wa-actions flex items-center gap-2">
+                        <div className="flex items-center gap-2 wa-actions">
                           {/* ☆/★ */}
                           <button
                             onClick={(e) => {
@@ -1429,7 +1860,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                                 ? "opacity-30 cursor-not-allowed"
                                 : isStarred(c)
                                   ? "text-yellow-500"
-                                  : "text-[#667781] hover:text-[#111b21]")
+                                  : "opacity-70 hover:opacity-100")
                             }
                             title={
                               lockedByOther
@@ -1452,8 +1883,8 @@ export default function ConversationsList({ activeId, onSelect }) {
                             className={
                               "px-2 py-1 rounded-full text-[11px] border " +
                               (!canDelete(c)
-                                ? "border-slate-200 text-slate-300 cursor-not-allowed"
-                                : "border-red-400 text-red-500 hover:bg-red-50")
+                                ? "border-base-300 opacity-30 cursor-not-allowed"
+                                : "border-red-400 text-red-500 hover:bg-red-500/10")
                             }
                             title={canDelete(c) ? "Eliminar conversación (soft delete)" : "Solo puede eliminarla el agente asignado"}
                           >
@@ -1467,27 +1898,29 @@ export default function ConversationsList({ activeId, onSelect }) {
               })}
 
             {!loading && (
-              <div className="py-3 text-xs text-center text-[#667781]">
+              <div className="py-3 text-xs text-center opacity-70">
                 {isLoadingMore && <div>Cargando más…</div>}
-                {!isLoadingMore && hasMore && <div ref={sentinelRef} className="h-6" aria-hidden />}
-                {!hasMore && <div>Fin de la lista</div>}
+                {!isLoadingMore && hasMore && !search.trim() && <div ref={sentinelRef} className="h-6" aria-hidden />}
+                {!hasMore && !search.trim() && <div>Fin de la lista</div>}
               </div>
             )}
 
             {!loading && displayItems.length === 0 && (
-              <div className="px-4 py-8 text-sm text-center text-[#667781]">No hay conversaciones para estos filtros.</div>
+              <div className="px-4 py-8 text-sm text-center opacity-70">
+                {searchDebounced.trim() ? "No hay resultados para esa búsqueda." : "No hay conversaciones para estos filtros."}
+              </div>
             )}
           </>
         ) : (
           // ===== Vista por etiqueta =====
           <div className="w-full md:flex md:min-h-0">
-            <aside className="hidden md:block w-64 border-r wa-border bg-[#f0f2f5] overflow-y-auto shrink-0">
-              <div className="p-3 border-b wa-border bg-[#f0f2f5]">
+            <aside className="hidden w-64 overflow-y-auto border-r md:block wa-border bg-base-200 shrink-0">
+              <div className="p-3 border-b wa-border bg-base-200">
                 <button
                   onClick={() => setSelectedLabel("__all__")}
                   className={
                     "w-full rounded-xl px-3 py-2 text-left text-sm font-semibold transition-colors border wa-border shadow-sm " +
-                    (selectedLabel === "__all__" ? "bg-[#25D366] text-[#0b3d1f]" : "bg-white hover:bg-[#f5f6f6]")
+                    (selectedLabel === "__all__" ? "bg-primary text-primary-content" : "bg-base-100 hover:bg-base-200")
                   }
                   title="Mis etiquetas (todas agrupadas)"
                 >
@@ -1505,33 +1938,29 @@ export default function ConversationsList({ activeId, onSelect }) {
                       onClick={() => setSelectedLabel(display)}
                       className={
                         "w-full rounded-xl border wa-border px-3 py-2 text-left text-sm transition-colors shadow-sm " +
-                        (isActive ? "bg-[#25D366] text-[#0b3d1f]" : "bg-white hover:bg-[#f5f6f6]")
+                        (isActive ? "bg-primary text-primary-content" : "bg-base-100 hover:bg-base-200")
                       }
                       title={isNone ? "Sin etiqueta" : display}
                     >
                       <div className="flex items-center justify-between gap-2">
                         <div className="truncate">
-                          {isNone ? (
-                            <span className="wa-pill wa-pill-other">Sin etiqueta</span>
-                          ) : (
-                            <span className="font-medium">{display}</span>
-                          )}
+                          {isNone ? <span className="wa-pill wa-pill-other">Sin etiqueta</span> : <span className="font-medium">{display}</span>}
                         </div>
                         <span className={"wa-pill " + (isActive ? "wa-pill-mine" : "wa-pill-other")}>{items.length}</span>
                       </div>
                     </button>
                   );
                 })}
-                {sortedGroups.length === 0 && !labelsLoading && (
-                  <div className="text-xs text-[#667781]">(No tenés conversaciones asignadas)</div>
+                {sortedGroups.length === 0 && !(labelsLoading && labelsAll.length === 0) && (
+                  <div className="text-xs opacity-70">(No tenés conversaciones asignadas)</div>
                 )}
               </div>
             </aside>
 
-            <div className="w-full md:hidden sticky top-0 z-10 border-b wa-border bg-[#f0f2f5]/95 backdrop-blur-sm p-2">
-              <label className="block mb-1 text-[11px] text-[#667781]">Etiqueta</label>
+            <div className="sticky top-0 z-10 w-full p-2 border-b md:hidden wa-border bg-base-200/95 backdrop-blur-sm">
+              <label className="block mb-1 text-[11px] opacity-70">Etiqueta</label>
               <select
-                className="w-full select select-sm bg-white border-[#d1d7db] focus:border-[#25D366] focus:outline-none"
+                className="w-full select select-sm bg-base-100 border-base-300 focus:border-primary focus:outline-none"
                 value={selectedLabel}
                 onChange={(e) => setSelectedLabel(e.target.value)}
               >
@@ -1545,7 +1974,7 @@ export default function ConversationsList({ activeId, onSelect }) {
             </div>
 
             <section className="w-full min-w-0 overflow-y-auto md:flex-1">
-              {labelsLoading ? (
+              {labelsLoading && labelsAll.length === 0 ? (
                 <div className="p-3 space-y-2">
                   <RowSkeleton />
                   <RowSkeleton />
@@ -1553,9 +1982,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                 </div>
               ) : (
                 <div className="p-2">
-                  {(
-                    selectedLabel === "__all__" ? labelsAll : labelsIndex.get(normSlug(selectedLabel))?.items || []
-                  ).map((c) => {
+                  {(selectedLabel === "__all__" ? labelsAll : labelsIndex.get(normSlug(selectedLabel))?.items || []).map((c) => {
                     const isActive = String(c.id) === String(activeId || "");
                     const slugs = Array.isArray(c.labels) ? c.labels : [];
                     const assignedToMe = user?.uid && c.assignedToUid === user?.uid;
@@ -1582,11 +2009,11 @@ export default function ConversationsList({ activeId, onSelect }) {
                         title={lockedByOther ? `Asignada a ${c.assignedToName || "otro agente"}` : c.id}
                       >
                         <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0 flex items-start gap-2">
+                          <div className="flex items-start min-w-0 gap-2">
                             <Avatar c={c} />
                             <div className="min-w-0">
                               <div className="flex items-center gap-2 font-mono text-sm truncate">
-                                <span className={isMine ? "font-extrabold text-[#0b3d1f]" : "font-semibold text-[#111b21]"}>
+                                <span className={isMine ? "font-extrabold text-primary" : "font-semibold text-base-content"}>
                                   {getDisplayName(c)}
                                 </span>
                                 {isMine && <span className="wa-pill wa-pill-mine">MÍO</span>}
@@ -1607,14 +2034,14 @@ export default function ConversationsList({ activeId, onSelect }) {
                                   e.stopPropagation();
                                   await unassign(c);
                                 }}
-                                className="px-3 py-1 text-[11px] font-semibold rounded-full bg-[#25D366] text-[#0b3d1f] border border-[#25D366]"
+                                className="px-3 py-1 text-[11px] font-semibold rounded-full bg-primary text-primary-content border border-primary"
                                 title="Desasignarme"
                               >
                                 Yo ✓
                               </button>
                             ) : c.assignedToUid ? (
                               <button
-                                className="px-3 py-1 text-[11px] font-semibold rounded-full bg-[#f0f2f5] text-[#667781] border border-[#d1d7db] cursor-not-allowed"
+                                className="px-3 py-1 text-[11px] font-semibold rounded-full bg-base-200 opacity-60 border border-base-300 cursor-not-allowed"
                                 disabled
                                 onClick={(e) => e.stopPropagation()}
                                 title={`Asignada a ${c.assignedToName || "otro agente"}`}
@@ -1627,7 +2054,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                                   e.stopPropagation();
                                   assignToMe(c);
                                 }}
-                                className="px-3 py-1 text-[11px] font-semibold rounded-full bg-[#25D366] text-[#0b3d1f] border border-[#25D366]"
+                                className="px-3 py-1 text-[11px] font-semibold rounded-full bg-primary text-primary-content border border-primary"
                                 title="Asignarme esta conversación"
                               >
                                 Asignarme
@@ -1639,12 +2066,13 @@ export default function ConversationsList({ activeId, onSelect }) {
                     );
                   })}
 
-                  {selectedLabel !== "__all__" &&
-                    (labelsIndex.get(normSlug(selectedLabel))?.items || []).length === 0 && (
-                      <div className="px-4 py-8 text-sm text-center text-[#667781]">
-                        No hay conversaciones en esta etiqueta.
-                      </div>
-                    )}
+                  {labelsBackfilling && (
+                    <div className="py-3 text-xs text-center opacity-70">Cargando más etiquetas en segundo plano…</div>
+                  )}
+
+                  {selectedLabel !== "__all__" && (labelsIndex.get(normSlug(selectedLabel))?.items || []).length === 0 && (
+                    <div className="px-4 py-8 text-sm text-center opacity-70">No hay conversaciones en esta etiqueta.</div>
+                  )}
                 </div>
               )}
             </section>
