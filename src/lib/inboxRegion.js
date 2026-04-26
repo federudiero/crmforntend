@@ -10,11 +10,11 @@ export const INBOX_REGIONS = {
     ],
   },
   villa_maria: {
-  key: "villa_maria",
-  label: "Inbox Villa María",
-  phoneIds: ["1126748053852551", "987669861103912"],
-  emails: ["escalantefr.p@gmail.com", "laurialvarez456@gmail.com"],
-},
+    key: "villa_maria",
+    label: "Inbox Villa María",
+    phoneIds: ["1126748053852551", "987669861103912"],
+    emails: ["escalantefr.p@gmail.com", "laurialvarez456@gmail.com"],
+  },
 };
 
 export function normalizeEmail(email) {
