@@ -1,6 +1,12 @@
 import { useState } from "react";
-import { signInWithEmailAndPassword } from "firebase/auth";
-import { auth } from "../firebase";
+import { signInWithEmailAndPassword, signOut } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
+import { auth, db } from "../firebase";
+import { getLinkedVendorRows, isEffectivelyActive } from "../lib/userAccess";
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -13,10 +19,33 @@ export default function Login() {
     e?.preventDefault?.();
     setErr("");
     setLoading(true);
+
     try {
-      await signInWithEmailAndPassword(auth, email.trim(), password);
+      const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
+
+      if (typeof auth?.authStateReady === "function") {
+        await auth.authStateReady();
+      }
+
+      await cred.user.getIdToken(true);
+      await wait(120);
+
+      const uid = String(auth?.currentUser?.uid || cred?.user?.uid || "").trim();
+      const userRef = doc(db, "users", uid);
+      const userSnap = await getDoc(userRef);
+      const userData = userSnap.exists() ? userSnap.data() || {} : {};
+      const linkedVendorRows = await getLinkedVendorRows({
+        db,
+        uid,
+        email: cred?.user?.email || email.trim(),
+      });
+
+      if (!isEffectivelyActive({ profile: userData, vendorRows: linkedVendorRows })) {
+        await signOut(auth);
+        throw new Error("Tu usuario está desactivado. Contactá al administrador.");
+      }
     } catch (e) {
-      setErr(e.message || "No se pudo iniciar sesión");
+      setErr(e?.message || "No se pudo iniciar sesión");
     } finally {
       setLoading(false);
     }
@@ -30,17 +59,12 @@ export default function Login() {
           "url('https://res.cloudinary.com/doxadkm4r/image/upload/v1763408194/forest-7601671_1920_c5theu.jpg')",
       }}
     >
-      {/* Capa oscura para mejorar contraste */}
       <div className="absolute inset-0 bg-slate-950/70" />
 
-      {/* Decoración de luces de colores */}
-      
-      {/* Contenido (formulario) */}
       <form
         onSubmit={submit}
         className="relative z-10 w-full max-w-md border shadow-2xl rounded-2xl backdrop-blur-xl border-white/10 bg-white/5"
       >
-        {/* Header */}
         <div className="px-6 pt-6 pb-4">
           <div className="flex items-center gap-3">
             <div className="relative w-10 h-10 overflow-hidden shadow-md rounded-xl">
@@ -52,13 +76,11 @@ export default function Login() {
             </div>
             <div>
               <h1 className="text-2xl font-bold tracking-tight">CRM</h1>
-             
             </div>
           </div>
         </div>
 
         <div className="px-6">
-          {/* Email */}
           <label className="text-sm font-medium text-slate-200">Email</label>
           <div className="relative mt-1">
             <div className="absolute inset-y-0 flex items-center pointer-events-none left-3">
@@ -75,7 +97,6 @@ export default function Login() {
             />
           </div>
 
-          {/* Password */}
           <div className="mt-4">
             <label className="text-sm font-medium text-slate-200">
               Contraseña
@@ -103,14 +124,12 @@ export default function Login() {
             </div>
           </div>
 
-          {/* Error */}
           {err && (
             <div className="px-3 py-2 mt-4 text-sm text-red-200 border border-red-500/40 bg-red-500/10 rounded-xl">
               {err}
             </div>
           )}
 
-          {/* Submit */}
           <button
             type="submit"
             disabled={loading}
@@ -146,7 +165,6 @@ export default function Login() {
           </button>
         </div>
 
-        {/* Footer decorativo */}
         <div className="w-full h-2 rounded-b-2xl bg-gradient-to-r from-fuchsia-500 to-cyan-500" />
       </form>
     </div>

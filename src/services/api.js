@@ -111,12 +111,19 @@ export async function checkTemplateEligibility({
   phone,
   templateName,
   languageCode = "es_AR",
+  conversationId,
+  fromWaPhoneId,
+  phoneId,
 }) {
   const payload = {
     phone,
     templateName,
     languageCode,
   };
+
+  if (conversationId) payload.conversationId = conversationId;
+  if (fromWaPhoneId) payload.fromWaPhoneId = fromWaPhoneId;
+  if (phoneId) payload.phoneId = phoneId;
 
   const r = await fetch(`${BASE}/api/check-template-eligibility`, {
     method: "POST",

@@ -60,12 +60,19 @@ function getTemplateVars(m) {
 }
 
 function buildResolvedTemplateText(templateName, vars) {
-    const v1 = stripZWSP(vars?.[0]); // cliente
-    const v2 = stripZWSP(vars?.[1]); // vendedora
-    const promos = (vars || []).slice(2).map(stripZWSP).filter(Boolean);
+    const v1 = stripZWSP(vars?.[0]);
+    const v2 = stripZWSP(vars?.[1]);
+    const extras = (vars || []).slice(2).map(stripZWSP).filter(Boolean);
 
     if (templateName === "reengage_free_text") {
-        return (v1 || `[Plantilla ${templateName}]`).trim();
+        const freeText = extras[0] || "";
+        if (freeText && freeText.toLowerCase() !== "hogarcril") {
+            return freeText.trim();
+        }
+
+        const hello = v1 ? `Hola ${v1}` : "Hola";
+        const sellerPart = v2 ? `, soy ${v2}` : "";
+        return `${hello}${sellerPart}.`.trim();
     }
 
     if (templateName === "promo_hogarcril_combos") {
@@ -83,8 +90,8 @@ function buildResolvedTemplateText(templateName, vars) {
 
         let out = header;
 
-        if (promos.length) {
-            out += `\n\n${promos.join("\n")}`;
+        if (extras.length) {
+            out += `\n\n${extras.join("\n")}`;
         }
 
         out += "\n\n¿Querés que te reserve alguno?";
@@ -93,7 +100,7 @@ function buildResolvedTemplateText(templateName, vars) {
 
     if (v1 || v2) {
         let out = `Hola${v1 ? " " + v1 : ""}${v2 ? ", soy " + v2 : ""}.`;
-        if (promos.length) out += `\n\n${promos.join("\n")}`;
+        if (extras.length) out += `\n\n${extras.join("\n")}`;
         return out.trim();
     }
 
@@ -132,7 +139,6 @@ export function isOutgoingMessage(m, user) {
 export function getVisibleText(m) {
     if (!m) return "";
 
-    // prioridad al texto real guardado por backend
     const directCandidates = [
         typeof m?.text === "string" ? m.text : null,
         typeof m?.resolvedText === "string" ? m.resolvedText : null,
@@ -159,18 +165,17 @@ export function getVisibleText(m) {
         !!m?.raw?.messages?.[0]?.template ||
         !!m?.raw?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.template;
 
-    // si es template y no vino "text", lo reconstruyo desde vars/components
     if (asTemplate) {
+        if (typeof m?.textPreview === "string" && m.textPreview.trim()) {
+            return m.textPreview.trim();
+        }
+
         const templateName = getTemplateName(m);
         const vars = getTemplateVars(m);
         const rebuilt = buildResolvedTemplateText(templateName, vars);
 
         if (rebuilt && rebuilt.trim()) {
             return rebuilt.trim();
-        }
-
-        if (typeof m?.textPreview === "string" && m.textPreview.trim()) {
-            return m.textPreview.trim();
         }
 
         const label = templateName ? `Plantilla ${templateName}` : "Plantilla";

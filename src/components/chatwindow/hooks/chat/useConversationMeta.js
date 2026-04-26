@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { doc, onSnapshot } from "firebase/firestore";
 import { db } from "../../../../firebase";
+import { isAdminUser } from "../../../../lib/userAccess";
 
 export default function useConversationMeta({ conversationId, user }) {
     const [convMeta, setConvMeta] = useState(null);
     const [convSlugs, setConvSlugs] = useState([]);
+    const [userMeta, setUserMeta] = useState(null);
 
     useEffect(() => {
         if (!conversationId) return;
@@ -20,10 +22,27 @@ export default function useConversationMeta({ conversationId, user }) {
         return () => unsub();
     }, [conversationId]);
 
+    useEffect(() => {
+        if (!user?.uid) {
+            setUserMeta(null);
+            return;
+        }
+
+        const unsub = onSnapshot(
+            doc(db, "users", String(user.uid)),
+            (snap) => setUserMeta(snap.exists() ? snap.data() || {} : {}),
+            (err) => {
+                console.error("onSnapshot(users/{uid}) error:", err);
+                setUserMeta({});
+            }
+        );
+
+        return () => unsub();
+    }, [user?.uid]);
+
     const isAdmin = useMemo(() => {
-        const email = (user?.email || "").toLowerCase();
-        return ["federudiero@gmail.com", "alainismael95@gmail.com", "fede_rudiero@gmail.com"].includes(email);
-    }, [user?.email]);
+        return isAdminUser({ email: user?.email, profile: userMeta });
+    }, [user?.email, userMeta]);
 
     const canRead = useMemo(() => {
         const assignedToUid = convMeta?.assignedToUid || null;
@@ -33,7 +52,7 @@ export default function useConversationMeta({ conversationId, user }) {
         if (isAdmin) return true;
 
         const meUid = user?.uid || "";
-        const meEmail = (user?.email || "").toLowerCase();
+        const meEmail = String(user?.email || "").toLowerCase();
 
         if (!assignedToUid && !assignedEmail && assignedList.length === 0) return false;
 

@@ -8,6 +8,7 @@ import {
   updateDoc,
   deleteDoc,
   setDoc,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "../firebase";
 
@@ -19,20 +20,73 @@ function normPhone(s) {
   return "+" + v.slice(1).replace(/\D/g, "");
 }
 
+function buildFullUserProfilePayload({
+  owner,
+  alias,
+  waPhoneId,
+  phone,
+  zone,
+  active,
+} = {}) {
+  return {
+    email: owner || "",
+    name: alias || "",
+    role: "seller",
+    waPhoneId: waPhoneId || "",
+    phone: phone || "",
+    zone: zone || "",
+    alias: alias || "",
+    active: active !== false,
+    updatedAt: Date.now(),
+  };
+}
+
+function buildUserProfilePatch(mergedRow, patch = {}) {
+  const trackedKeys = ["ownerUid", "owner", "alias", "waPhoneId", "phone", "zone", "active"];
+  const shouldSync = trackedKeys.some((key) => Object.prototype.hasOwnProperty.call(patch, key));
+  if (!shouldSync) return null;
+
+  const out = {
+    role: "seller",
+    updatedAt: Date.now(),
+  };
+
+  if (Object.prototype.hasOwnProperty.call(patch, "owner") || Object.prototype.hasOwnProperty.call(patch, "ownerUid")) {
+    out.email = mergedRow.owner || "";
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "alias") || Object.prototype.hasOwnProperty.call(patch, "ownerUid")) {
+    out.name = mergedRow.alias || "";
+    out.alias = mergedRow.alias || "";
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "waPhoneId") || Object.prototype.hasOwnProperty.call(patch, "ownerUid")) {
+    out.waPhoneId = mergedRow.waPhoneId || "";
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "phone") || Object.prototype.hasOwnProperty.call(patch, "ownerUid")) {
+    out.phone = mergedRow.phone || "";
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "zone") || Object.prototype.hasOwnProperty.call(patch, "ownerUid")) {
+    out.zone = mergedRow.zone || "";
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "active") || Object.prototype.hasOwnProperty.call(patch, "ownerUid")) {
+    out.active = mergedRow.active !== false;
+  }
+
+  return out;
+}
+
 export default function AdminVendors() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
 
-  // ⬇️ sumamos ownerUid
   const [form, setForm] = useState({
     phone: "",
     waPhoneId: "",
     zone: "",
     alias: "",
     active: true,
-    owner: "",    // responsable (email o nombre)
-    ownerUid: "", // UID del vendedor (Auth)
+    owner: "",
+    ownerUid: "",
     notes: "",
   });
 
@@ -47,7 +101,6 @@ export default function AdminVendors() {
     load();
   }, []);
 
-  // 🔁 Crea/actualiza perfil users/{uid} si hay ownerUid
   const upsertUserProfile = async ({
     ownerUid,
     owner,
@@ -55,22 +108,14 @@ export default function AdminVendors() {
     waPhoneId,
     phone,
     zone,
+    active,
   }) => {
-    const uid = (ownerUid || "").trim();
-    if (!uid) return; // si no hay UID, no hacemos nada
+    const uid = String(ownerUid || "").trim();
+    if (!uid) return;
+
     await setDoc(
       doc(db, "users", uid),
-      {
-        email: owner || "",
-        name: alias || "",
-        role: "seller",
-        waPhoneId: waPhoneId || "",
-        phone: phone || "",
-        zone: zone || "",
-        alias: alias || "",
-        active: true,
-        updatedAt: Date.now(),
-      },
+      buildFullUserProfilePayload({ owner, alias, waPhoneId, phone, zone, active }),
       { merge: true }
     );
   };
@@ -87,17 +132,15 @@ export default function AdminVendors() {
       waPhoneId: form.waPhoneId.trim(),
       zone: form.zone.trim(),
       alias: form.alias?.trim() || phone,
-      active: !!form.active,
-      owner: form.owner?.trim() || "",
+      active: form.active !== false,
+      owner: form.owner?.trim().toLowerCase() || "",
       ownerUid: form.ownerUid?.trim() || "",
       notes: form.notes?.trim() || "",
       createdAt: Date.now(),
     };
 
-    // 1) guardamos el número en wabaNumbers
     await addDoc(collection(db, "wabaNumbers"), payload);
 
-    // 2) si hay UID, creamos/actualizamos el perfil del vendedor
     if (payload.ownerUid) {
       await upsertUserProfile(payload);
     }
@@ -116,8 +159,28 @@ export default function AdminVendors() {
   };
 
   const saveInline = async (row, patch) => {
-    await updateDoc(doc(db, "wabaNumbers", row.id), patch);
-    setRows((rs) => rs.map((r) => (r.id === row.id ? { ...r, ...patch } : r)));
+    const normalizedPatch = { ...patch };
+    if (Object.prototype.hasOwnProperty.call(normalizedPatch, "owner")) {
+      normalizedPatch.owner = String(normalizedPatch.owner || "").trim().toLowerCase();
+    }
+    if (Object.prototype.hasOwnProperty.call(normalizedPatch, "phone")) {
+      normalizedPatch.phone = normPhone(normalizedPatch.phone);
+    }
+
+    const merged = { ...row, ...normalizedPatch };
+    const uid = String(merged.ownerUid || "").trim();
+    const userPatch = uid ? buildUserProfilePatch(merged, normalizedPatch) : null;
+
+    if (userPatch) {
+      const batch = writeBatch(db);
+      batch.update(doc(db, "wabaNumbers", row.id), normalizedPatch);
+      batch.set(doc(db, "users", uid), userPatch, { merge: true });
+      await batch.commit();
+    } else {
+      await updateDoc(doc(db, "wabaNumbers", row.id), normalizedPatch);
+    }
+
+    setRows((rs) => rs.map((r) => (r.id === row.id ? merged : r)));
   };
 
   const remove = async (row) => {
@@ -142,7 +205,6 @@ export default function AdminVendors() {
 
   return (
     <div className="space-y-6">
-      {/* Alta */}
       <form onSubmit={add} className="grid gap-3 p-4 border rounded md:grid-cols-8">
         <input
           className="p-2 border rounded"
@@ -204,7 +266,6 @@ export default function AdminVendors() {
         </div>
       </form>
 
-      {/* Header + buscador */}
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-semibold">Números de vendedores</h3>
         <input
@@ -215,7 +276,6 @@ export default function AdminVendors() {
         />
       </div>
 
-      {/* Tabla */}
       <div className="overflow-x-auto">
         <table className="w-full text-sm border">
           <thead className="bg-gray-50">
@@ -324,6 +384,7 @@ export default function AdminVendors() {
                         waPhoneId: row.waPhoneId,
                         phone: row.phone,
                         zone: row.zone,
+                        active: row.active,
                       }).then(() => alert("Perfil sincronizado"))
                     }
                   >

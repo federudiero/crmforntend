@@ -1,14 +1,23 @@
 // src/components/TagsMenu.jsx
 import React, { useMemo, useState } from "react";
 
+function buildSelectedSet(selected) {
+  if (!selected) return new Set();
+  if (selected instanceof Set) return selected;
+  if (Array.isArray(selected)) return new Set(selected.filter(Boolean));
+  return new Set([selected].filter(Boolean));
+}
+
 /**
  * Props esperadas:
  *  - tags: Array<{ slug: string; name: string; count: number }>
- *  - onPick?: (slug: string) => void  // callback al hacer click
- *  - selected?: string | null         // slug seleccionado (opcional)
+ *  - onPick?: (slug: string) => void
+ *  - selected?: string | string[] | Set<string> | null
  */
 export default function TagsMenu({ tags = [], onPick, selected = null }) {
   const [q, setQ] = useState("");
+
+  const selectedSet = useMemo(() => buildSelectedSet(selected), [selected]);
 
   const filtradas = useMemo(() => {
     const t = (q || "").trim().toLowerCase();
@@ -24,19 +33,18 @@ export default function TagsMenu({ tags = [], onPick, selected = null }) {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Header + buscador */}
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div className="flex gap-2 items-center">
+        <div className="flex flex-wrap items-center gap-2">
           <h2 className="text-lg font-semibold">Mis etiquetas</h2>
           <span className="badge badge-outline">{tags.length}</span>
           <span className="badge badge-ghost">Total conv: {total}</span>
         </div>
-       <div className="flex gap-2 w-full md:w-auto">
+        <div className="flex w-full gap-2 md:w-auto">
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Buscar etiqueta…"
-            className="w-64 input input-bordered"
+            className="w-full md:w-64 input input-bordered"
           />
           {q && (
             <button className="btn btn-ghost" onClick={() => setQ("")}>
@@ -46,42 +54,47 @@ export default function TagsMenu({ tags = [], onPick, selected = null }) {
         </div>
       </div>
 
-      {/* Grid de etiquetas */}
       {filtradas.length === 0 ? (
         <div className="alert alert-info">
           <span>No se encontraron etiquetas para “{q}”.</span>
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
           {filtradas
-            // opcional: orden por cantidad desc
             .slice()
             .sort((a, b) => (b?.count || 0) - (a?.count || 0))
             .map((tag) => {
-              const active = selected === tag.slug;
+              const active = selectedSet.has(tag.slug);
               return (
                 <button
                   key={tag.slug}
                   onClick={() => onPick?.(tag.slug)}
-                   className={["card w-full shadow-sm border transition-colors text-sm",
+                  className={[
+                    "card w-full shadow-sm border transition-all text-sm",
                     active
-                      ? "bg-primary text-primary-content border-primary"
+                      ? "bg-primary/15 border-primary ring-1 ring-primary"
                       : "bg-base-200 hover:bg-base-300 border-base-300",
                   ].join(" ")}
+                  aria-pressed={active}
+                  title={active ? "Etiqueta aplicada a esta conversación" : "Aplicar etiqueta"}
                 >
                   <div className="px-4 py-3 card-body">
-                    <div className="flex gap-3 justify-between items-center">
-                      <div className="text-left">
-                        <div className="font-medium leading-tight [text-wrap:balance]">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0 text-left">
+                        <div className="font-medium leading-tight [text-wrap:balance] truncate">
                           {tag.name || tag.slug}
                         </div>
-                        <div className="text-xs opacity-70">{tag.slug}</div>
+                        <div className="text-xs truncate opacity-70">{tag.slug}</div>
                       </div>
-                      <div className="flex gap-2 items-center">
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        {active && (
+                          <span className="badge badge-primary badge-sm">Aplicada</span>
+                        )}
                         <span
                           className={[
-                            "badge",
-                            active ? "badge-outline" : "badge-neutral",
+                            "badge badge-sm",
+                            active ? "badge-outline border-primary text-primary" : "badge-neutral",
                           ].join(" ")}
                           title="Conversaciones con esta etiqueta"
                         >

@@ -19,9 +19,18 @@ import {
   setDoc,
   startAt,
   endAt,
+  serverTimestamp,
 } from "firebase/firestore";
 import { useAuthState } from "../hooks/useAuthState.js";
 import LabelChips from "./LabelChips.jsx";
+import {
+  getAssignedEmail,
+  getAssignedUid,
+  getConversationAssigneeLabel,
+  getConversationPhoneId,
+  isConversationAssignedToUser,
+  isConversationUnassigned,
+} from "../lib/inboxRegion.js";
 
 /** Fecha corta */
 function formatShort(ts) {
@@ -52,24 +61,7 @@ const toTitleCase = (s) =>
 /** Normaliza slugs */
 const normSlug = (s) => String(s ?? "").trim().toLowerCase();
 
-/** ======== Filtro Córdoba vs Villa María ======== */
-const CORDOBA_WA_PHONE_IDS = new Set([
-  "807747825759387", // Christian
-  "729326663073216", // Camila
-  "834087939786971", // Juli
-]);
-
-const CORDOBA_EMAILS = new Set([
-  "christian15366@gmail.com",
-  "lunacami00@gmail.com",
-  "julicisneros.89@gmail.com",
-]);
-
-const getConvWaPhoneId = (c) =>
-  String(c?.lastInboundPhoneId || c?.lastInboundPhoneID || c?.waPhoneId || "").trim();
-
-const isCordobaConv = (c) => CORDOBA_WA_PHONE_IDS.has(getConvWaPhoneId(c));
-
+/** ======== Región configurable ======== */
 /** Chunk helper */
 function chunk(array, size = 10) {
   const out = [];
@@ -121,29 +113,34 @@ function RowSkeleton() {
   );
 }
 
-export default function ConversationsList({ activeId, onSelect }) {
+export default function ConversationsList({
+  activeId,
+  onSelect,
+  allowedPhoneIds = [],
+  allowedEmails = [],
+  title = "Conversaciones",
+}) {
   const { user } = useAuthState();
 
-  // ✅ Este componente es SOLO para Córdoba.
-  // Christian / Camila / Juli ven solo conversaciones de sus números de Córdoba.
-  // Todo lo de Villa María queda bloqueado.
   const currentEmail = useMemo(
     () => String(user?.email || "").trim().toLowerCase(),
     [user?.email]
   );
 
-  const isCordobaUser = useMemo(
-    () => CORDOBA_EMAILS.has(currentEmail),
-    [currentEmail]
+  const allowedPhoneIdsSet = useMemo(
+    () => new Set((allowedPhoneIds || []).map((item) => String(item || "").trim()).filter(Boolean)),
+    [allowedPhoneIds]
+  );
+
+  const allowedEmailsSet = useMemo(
+    () => new Set((allowedEmails || []).map((item) => String(item || "").trim().toLowerCase()).filter(Boolean)),
+    [allowedEmails]
   );
 
   const isBlockedForMe = (c) => {
-    // si por error entra otro usuario a este componente, no ve nada
-    if (!isCordobaUser) return true;
-
-    // solo se muestran conversaciones cuyo lastInboundPhoneId
-    // corresponda a alguno de los 3 números de Córdoba
-    return !isCordobaConv(c);
+    if (allowedEmailsSet.size > 0 && !allowedEmailsSet.has(currentEmail)) return true;
+    if (allowedPhoneIdsSet.size === 0) return false;
+    return !allowedPhoneIdsSet.has(getConversationPhoneId(c));
   };
 
   // ======= Estilos locales (ahora por tokens del theme) =======
@@ -797,11 +794,18 @@ export default function ConversationsList({ activeId, onSelect }) {
 
   const isAdmin = !!user?.email && ["federudiero@gmail.com", "fede_rudiero@gmail.com"].includes(user.email);
 
+  const isAssignedToMe = (c) =>
+    isConversationAssignedToUser(c, { uid: user?.uid, email: currentEmail });
+
+  const isUnassignedConversation = (c) => isConversationUnassigned(c);
+
+  const isLockedByOther = (c) => !isUnassignedConversation(c) && !isAssignedToMe(c);
+
   const canDelete = (c) => {
     if (!user?.uid) return false;
     if (isBlockedForMe(c)) return false;
     if (isAdmin) return true;
-    return c.assignedToUid === user.uid;
+    return isAssignedToMe(c);
   };
 
   const toggleStar = async (c) => {
@@ -825,20 +829,29 @@ export default function ConversationsList({ activeId, onSelect }) {
       await runTransaction(db, async (tx) => {
         const snap = await tx.get(ref);
         if (!snap.exists()) throw new Error("La conversación no existe.");
-        const cur = snap.data();
-        const currentUid = cur.assignedToUid || null;
-        if (currentUid && currentUid !== user.uid) {
+        const cur = snap.data() || {};
+        const currentAssignedUid = getAssignedUid(cur);
+        const currentAssignedEmail = getAssignedEmail(cur);
+        const meEmail = String(user.email || "").trim().toLowerCase();
+
+        if (
+          (currentAssignedUid && currentAssignedUid !== user.uid) ||
+          (currentAssignedEmail && currentAssignedEmail !== meEmail)
+        ) {
           throw new Error("Esta conversación ya está asignada a otro agente.");
         }
         tx.update(ref, {
           assignedToUid: user.uid,
+          assignedToEmail: user.email || null,
           assignedToName: user.displayName || user.email || "Agente",
+          assignedAt: serverTimestamp(),
         });
         // ❌ NO marcamos visto acá
       });
 
       applyLocalPatch(c.id, {
         assignedToUid: user.uid,
+        assignedToEmail: user.email || null,
         assignedToName: user.displayName || user.email || "Agente",
       });
     } catch (e) {
@@ -858,16 +871,31 @@ export default function ConversationsList({ activeId, onSelect }) {
         if (!snap.exists()) throw new Error("La conversación no existe.");
 
         const cur = snap.data() || {};
-        const assignedUid = cur.assignedToUid || null;
+        const assignedUid = getAssignedUid(cur);
+        const assignedEmail = getAssignedEmail(cur);
+        const meEmail = String(user.email || "").trim().toLowerCase();
 
-        if (assignedUid && assignedUid !== user.uid) {
-          throw new Error(`Esta conversación ya está asignada a ${cur.assignedToName || "otro agente"}.`);
+        if (
+          (assignedUid && assignedUid !== user.uid) ||
+          (assignedEmail && assignedEmail !== meEmail)
+        ) {
+          throw new Error(`Esta conversación ya está asignada a ${getConversationAssigneeLabel(cur)}.`);
         }
 
-        tx.update(ref, { assignedToUid: null, assignedToName: null });
+        tx.update(ref, {
+          assignedToUid: null,
+          assignedToEmail: null,
+          assignedToName: null,
+          assignedAt: null,
+        });
       });
 
-      applyLocalPatch(c.id, { assignedToUid: null, assignedToName: null });
+      applyLocalPatch(c.id, {
+        assignedToUid: null,
+        assignedToEmail: null,
+        assignedToName: null,
+        assignedAt: null,
+      });
     } catch (e) {
       console.error("unassign error", e);
       alert(e?.message || "No se pudo desasignar.");
@@ -897,7 +925,7 @@ export default function ConversationsList({ activeId, onSelect }) {
     }
   };
 
-  const canOpen = (c) => !isBlockedForMe(c) && (!c.assignedToUid || c.assignedToUid === user?.uid);
+  const canOpen = (c) => !isBlockedForMe(c) && (isUnassignedConversation(c) || isAssignedToMe(c));
 
   const isUnread = (c) => {
     if (!canOpen(c)) return false;
@@ -1325,7 +1353,7 @@ export default function ConversationsList({ activeId, onSelect }) {
       const phone = foldText(c.contact?.phone || c.contactId || "");
       const lastText = foldText(c.lastMessageText || "");
       const labels = foldText(Array.isArray(c.labels) ? c.labels.join(" ") : "");
-      const assigned = foldText(c.assignedToName || c.assignedToUid || "");
+      const assigned = foldText(c.assignedToName || c.assignedToEmail || c.assignedToUid || "");
 
       const phoneDigits = onlyDigits(c.contact?.phone || c.contactId || "");
       const idDigits = onlyDigits(c.id || "");
@@ -1345,7 +1373,7 @@ export default function ConversationsList({ activeId, onSelect }) {
   // Filtros por tab
   const filtered = useMemo(() => {
     const base = filteredByText;
-    if (tab === "mios" && user?.uid) return base.filter((c) => c.assignedToUid === user.uid);
+    if (tab === "mios" && user) return base.filter((c) => isAssignedToMe(c));
     if (tab === "fav" && user?.uid) return base.filter((c) => Array.isArray(c.stars) && c.stars.includes(user.uid));
     return base;
   }, [filteredByText, tab, user?.uid]);
@@ -1353,7 +1381,7 @@ export default function ConversationsList({ activeId, onSelect }) {
   // ✅ Conteos para chips
   const unassignedCount = useMemo(() => {
     if (tab !== "todos") return 0;
-    return filtered.filter((c) => !c.assignedToUid).length;
+    return filtered.filter((c) => isUnassignedConversation(c)).length;
   }, [filtered, tab]);
 
   const unreadCount = useMemo(() => {
@@ -1365,7 +1393,7 @@ export default function ConversationsList({ activeId, onSelect }) {
   const displayItems = useMemo(() => {
     let list = filtered;
 
-    if (quickFilter === "unassigned" && tab === "todos") list = list.filter((c) => !c.assignedToUid);
+    if (quickFilter === "unassigned" && tab === "todos") list = list.filter((c) => isUnassignedConversation(c));
     else if (quickFilter === "unread") list = list.filter((c) => isUnread(c));
 
     return list;
@@ -1408,7 +1436,7 @@ export default function ConversationsList({ activeId, onSelect }) {
       if (!docs || docs.length === 0) return { last: null, addedIds: [] };
 
       const rows = docs.map((d) => ({ id: d.id, ...d.data(), contact: null }));
-      const mine = rows.filter((c) => !c.deletedAt && c.assignedToUid === user.uid && !isBlockedForMe(c));
+            const mine = rows.filter((c) => !c.deletedAt && isAssignedToMe(c) && !isBlockedForMe(c));
 
       // dedupe global (solo para etiquetas)
       const added = [];
@@ -1541,7 +1569,7 @@ export default function ConversationsList({ activeId, onSelect }) {
   }, [tab, user?.uid]);
 
   const baseForLabels =
-    tab === "etiquetas" ? labelsAll : user?.uid ? filtered.filter((c) => c.assignedToUid === user?.uid) : [];
+    tab === "etiquetas" ? labelsAll : user ? filtered.filter((c) => isAssignedToMe(c)) : [];
 
   const labelsIndex = useMemo(() => {
     const map = new Map();
@@ -1585,6 +1613,7 @@ export default function ConversationsList({ activeId, onSelect }) {
 
       {/* Header superior */}
       <div className="sticky top-0 z-10 border-b wa-border bg-base-200/95 backdrop-blur-sm">
+        <div className="px-3 pt-2 text-[11px] font-semibold uppercase tracking-wide opacity-60">{title}</div>
         <div className="flex flex-wrap items-center gap-3 px-3 py-2">
           {/* Tabs */}
           <div className="flex max-w-full overflow-x-auto border shadow-sm rounded-2xl bg-base-100 wa-border">
@@ -1713,9 +1742,9 @@ export default function ConversationsList({ activeId, onSelect }) {
               displayItems.map((c) => {
                 const isActive = String(c.id) === String(activeId || "");
                 const slugs = Array.isArray(c.labels) ? c.labels : [];
-                const assignedToMe = user?.uid && c.assignedToUid === user?.uid;
+                const assignedToMe = isAssignedToMe(c);
                 const isMine = !!assignedToMe;
-                const lockedByOther = !!c.assignedToUid && !assignedToMe;
+                const lockedByOther = isLockedByOther(c);
 
                 // ✅ No leído (WhatsApp-like)
                 const showNew = !isActive && isUnread(c);
@@ -1738,7 +1767,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                     onKeyDown={(e) => {
                       if ((e.key === "Enter" || e.key === " ") && canOpen(c)) tryOpen(c);
                     }}
-                    title={lockedByOther ? `Asignada a ${c.assignedToName || "otro agente"}` : c.id}
+                    title={lockedByOther ? `Asignada a ${getConversationAssigneeLabel(c)}` : c.id}
                   >
                     <div className="flex items-start justify-between gap-3">
                       {/* info cliente */}
@@ -1762,8 +1791,8 @@ export default function ConversationsList({ activeId, onSelect }) {
                               </span>
                             )}
 
-                            {!isMine && c.assignedToUid && (
-                              <span className="wa-pill wa-pill-other" title={`Asignado a ${c.assignedToName || c.assignedToUid}`}>
+                            {!isMine && !isUnassignedConversation(c) && (
+                              <span className="wa-pill wa-pill-other" title={`Asignado a ${getConversationAssigneeLabel(c)}`}>
                                 OCUPADA
                               </span>
                             )}
@@ -1792,11 +1821,11 @@ export default function ConversationsList({ activeId, onSelect }) {
                           </div>
 
                           <div className="mt-1 text-[11px] opacity-70">
-                            {c.assignedToUid ? (
+                            {isLockedByOther(c) || assignedToMe ? (
                               <span>
                                 Asignado a{" "}
                                 <b className="text-base-content">
-                                  {c.assignedToUid === user?.uid ? "mí" : c.assignedToName || c.assignedToUid}
+                                  {assignedToMe ? "mí" : getConversationAssigneeLabel(c)}
                                 </b>
                               </span>
                             ) : (
@@ -1821,12 +1850,12 @@ export default function ConversationsList({ activeId, onSelect }) {
                             >
                               Yo ✓
                             </button>
-                          ) : c.assignedToUid ? (
+                          ) : isLockedByOther(c) ? (
                             <button
                               className="px-3 py-1 text-[11px] font-semibold rounded-full bg-base-200 opacity-60 border border-base-300 cursor-not-allowed"
                               disabled
                               onClick={(e) => e.stopPropagation()}
-                              title={`Asignada a ${c.assignedToName || "otro agente"}`}
+                              title={`Asignada a ${getConversationAssigneeLabel(c)}`}
                             >
                               Ocupada
                             </button>
@@ -1985,9 +2014,9 @@ export default function ConversationsList({ activeId, onSelect }) {
                   {(selectedLabel === "__all__" ? labelsAll : labelsIndex.get(normSlug(selectedLabel))?.items || []).map((c) => {
                     const isActive = String(c.id) === String(activeId || "");
                     const slugs = Array.isArray(c.labels) ? c.labels : [];
-                    const assignedToMe = user?.uid && c.assignedToUid === user?.uid;
+                    const assignedToMe = isAssignedToMe(c);
                     const isMine = !!assignedToMe;
-                    const lockedByOther = !!c.assignedToUid && !assignedToMe;
+                    const lockedByOther = isLockedByOther(c);
                     const showNew = !isActive && isUnread(c);
 
                     return (
@@ -2006,7 +2035,7 @@ export default function ConversationsList({ activeId, onSelect }) {
                         onKeyDown={(e) => {
                           if ((e.key === "Enter" || e.key === " ") && canOpen(c)) tryOpen(c);
                         }}
-                        title={lockedByOther ? `Asignada a ${c.assignedToName || "otro agente"}` : c.id}
+                        title={lockedByOther ? `Asignada a ${getConversationAssigneeLabel(c)}` : c.id}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex items-start min-w-0 gap-2">
@@ -2039,12 +2068,12 @@ export default function ConversationsList({ activeId, onSelect }) {
                               >
                                 Yo ✓
                               </button>
-                            ) : c.assignedToUid ? (
+                            ) : isLockedByOther(c) ? (
                               <button
                                 className="px-3 py-1 text-[11px] font-semibold rounded-full bg-base-200 opacity-60 border border-base-300 cursor-not-allowed"
                                 disabled
                                 onClick={(e) => e.stopPropagation()}
-                                title={`Asignada a ${c.assignedToName || "otro agente"}`}
+                                title={`Asignada a ${getConversationAssigneeLabel(c)}`}
                               >
                                 Ocupada
                               </button>

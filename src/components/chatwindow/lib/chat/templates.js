@@ -15,17 +15,35 @@ export function combosTimeGreeting(d = new Date()) {
     return "buenas noches";
 }
 
+function resolveInboundProfileName(rawWebhookSnapshot) {
+    const fromCompactSnapshot =
+        rawWebhookSnapshot?.contacts?.[0]?.profile?.name ||
+        rawWebhookSnapshot?.contacts?.[0]?.name ||
+        "";
+
+    const fromFullWebhook =
+        rawWebhookSnapshot?.entry?.[0]?.changes?.[0]?.value?.contacts?.[0]?.profile?.name ||
+        "";
+
+    return String(fromCompactSnapshot || fromFullWebhook || "").trim();
+}
+
 export function buildReengageTemplate({
     contact,
     sellerUser,
     rawWebhookSnapshot,
     freeText,
 }) {
-    const waProfile =
-        rawWebhookSnapshot?.entry?.[0]?.changes?.[0]?.value?.contacts?.[0]?.profile
-            ?.name || "";
+    const waProfile = resolveInboundProfileName(rawWebhookSnapshot);
 
-    const crm = (contact?.displayName || contact?.name || "").trim();
+    const crm = String(
+        contact?.displayName ||
+            contact?.name ||
+            contact?.profileName ||
+            contact?.lastInboundContactName ||
+            ""
+    ).trim();
+
     const client = (crm || waProfile || "\u200B").trim();
 
     const p1 = sanitizeParamText(client || "\u200B");

@@ -75,6 +75,8 @@ export default function TemplateEligibilityChecker({
   onResult,
   autoCheck = false,
   className = "",
+  conversationId = "",
+  fromWaPhoneId = "",
 }) {
   const [phone, setPhone] = useState(initialPhone || "");
   const [loading, setLoading] = useState(false);
@@ -104,6 +106,8 @@ export default function TemplateEligibilityChecker({
       const data = await checkTemplateEligibility({
         phone: target,
         templateName,
+        conversationId,
+        fromWaPhoneId,
       });
 
       const decorated = {
@@ -134,14 +138,14 @@ export default function TemplateEligibilityChecker({
 
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoCheck, normalizedPhone, templateName]);
+  }, [autoCheck, normalizedPhone, templateName, conversationId, fromWaPhoneId]);
 
   return (
     <div className={`card bg-base-100 border border-base-300 shadow-sm ${className}`}>
-      <div className="card-body p-4 gap-3">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
+      <div className="gap-3 p-4 card-body">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="font-semibold text-base">Chequeo de permiso para plantilla</h3>
+            <h3 className="text-base font-semibold">Chequeo de permiso para plantilla</h3>
             <p className="text-sm opacity-70">
               Valida si el número tiene opt-in antes de enviar la plantilla.
             </p>
@@ -149,10 +153,10 @@ export default function TemplateEligibilityChecker({
           <div className="badge badge-outline">{templateName}</div>
         </div>
 
-        <div className="flex flex-col md:flex-row gap-2">
+        <div className="flex flex-col gap-2 md:flex-row">
           <input
             type="tel"
-            className="input input-bordered w-full"
+            className="w-full input input-bordered"
             placeholder="+5493512345678"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
@@ -174,7 +178,7 @@ export default function TemplateEligibilityChecker({
         </div>
 
         {!!error && (
-          <div className="alert alert-error text-sm">
+          <div className="text-sm alert alert-error">
             <span>{error}</span>
           </div>
         )}
@@ -183,15 +187,15 @@ export default function TemplateEligibilityChecker({
           <div className={`alert ${ui.tone} items-start`}>
             <ui.Icon className="w-5 h-5 mt-0.5" />
             <div className="w-full">
-              <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex flex-wrap items-center gap-2">
                 <strong>{ui.title}</strong>
                 <span className={`badge ${ui.badge}`}>{result.status}</span>
               </div>
 
-              <div className="text-sm mt-1">{result.reason}</div>
+              <div className="mt-1 text-sm">{result.reason}</div>
 
-              <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
-                <div className="rounded-lg border border-base-300 bg-base-100/70 p-3">
+              <div className="grid grid-cols-1 gap-2 mt-3 text-sm md:grid-cols-2">
+                <div className="p-3 border rounded-lg border-base-300 bg-base-100/70">
                   <div>
                     <b>Número canónico:</b> {result?.phone?.convId || normalizedPhone}
                   </div>
@@ -206,7 +210,7 @@ export default function TemplateEligibilityChecker({
                   </div>
                 </div>
 
-                <div className="rounded-lg border border-base-300 bg-base-100/70 p-3">
+                <div className="p-3 border rounded-lg border-base-300 bg-base-100/70">
                   <div>
                     <b>Modo backend:</b>{" "}
                     {result?.policy?.requireMarketingOptIn

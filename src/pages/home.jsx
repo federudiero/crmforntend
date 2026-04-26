@@ -10,20 +10,16 @@ import { Menu } from "lucide-react";
 import usePresence from "../hooks/usePresence";
 
 import ConversationsList from "../components/ConversationsList.jsx";
-import ConversationsListFernando from "../components/ConversationsListFernando.jsx";
 import ChatWindow from "../components/chatwindow/ChatWindow.jsx";
 import AdminPanel from "../components/AdminPanel.jsx";
 import RemarketingBulk from "../components/RemarketingBulk.jsx";
 import AgendaCalendario from "../components/AgendaCalendario.jsx";
-
-const PRIVATE_INBOX_USERS = {
-  "escalantefr.p@gmail.com": {
-    label: "Inbox privado",
-  },
-  "laurialvarez456@gmail.com": {
-    label: "Inbox privado",
-  },
-};
+import {
+  getInboxRegionByEmail,
+  isConversationAssignedToUser,
+  isConversationInRegion,
+  isConversationUnassigned,
+} from "../lib/inboxRegion.js";
 
 export default function Home() {
   const { user } = useAuthState();
@@ -141,8 +137,8 @@ export default function Home() {
 
   const isAdmin = !!user?.email && adminEmails.includes(currentEmail);
 
-  const privateInboxConfig = PRIVATE_INBOX_USERS[currentEmail] || null;
-  const isPrivateInboxUser = !!privateInboxConfig;
+  const inboxRegion = useMemo(() => getInboxRegionByEmail(currentEmail), [currentEmail]);
+  const isRegionalInboxUser = !!inboxRegion;
 
   useEffect(() => {
     if (isAdmin && showRemarketing) {
@@ -150,75 +146,47 @@ export default function Home() {
     }
   }, [isAdmin, showRemarketing]);
 
-  // Para usuarios con inbox privado (Fernando / Laura):
-  // cargamos su waPhoneId desde users/{uid}
-  const [privateInboxWaPhoneId, setPrivateInboxWaPhoneId] = useState(null);
+  const convIsInMyRegion = useMemo(() => {
+    if (!currentConvMeta || !inboxRegion) return false;
+    return isConversationInRegion(currentConvMeta, inboxRegion);
+  }, [currentConvMeta, inboxRegion]);
 
-  useEffect(() => {
-    if (!isPrivateInboxUser || !user?.uid) {
-      setPrivateInboxWaPhoneId(null);
-      return;
-    }
+  const convIsAssignedToMe = useMemo(() => {
+    if (!currentConvMeta || !user) return false;
+    return isConversationAssignedToUser(currentConvMeta, {
+      uid: currentUid,
+      email: currentEmail,
+    });
+  }, [currentConvMeta, user, currentUid, currentEmail]);
 
-    const unsub = onSnapshot(
-      doc(db, "users", String(user.uid)),
-      (snap) => {
-        const d = snap.data() || {};
-        setPrivateInboxWaPhoneId(d?.waPhoneId ? String(d.waPhoneId) : null);
-      },
-      (err) => {
-        console.error("Error leyendo users/{uid}.waPhoneId:", err);
-        setPrivateInboxWaPhoneId(null);
-      }
-    );
-
-    return () => unsub();
-  }, [isPrivateInboxUser, user?.uid]);
+  const convIsUnassigned = useMemo(() => {
+    if (!currentConvMeta) return false;
+    return isConversationUnassigned(currentConvMeta);
+  }, [currentConvMeta]);
 
   const canAccess = useMemo(() => {
     if (!user || !currentConvMeta) return false;
     if (isAdmin) return true;
 
-    // Usuarios privados (Fernando / Laura)
-    if (isPrivateInboxUser) {
-      if (!privateInboxWaPhoneId) return false;
-
-      const convPhone = String(
-        currentConvMeta.lastInboundPhoneId || currentConvMeta.waPhoneId || ""
-      ).trim();
-
-      // El chat tiene que pertenecer a su número
-      if (convPhone !== String(privateInboxWaPhoneId)) return false;
-
-      const assignedUid = String(currentConvMeta.assignedToUid || "").trim();
-      const assignedEmail = String(currentConvMeta.assignedToEmail || "")
-        .trim()
-        .toLowerCase();
-
-      // Si no está asignado, puede verlo
-      if (!assignedUid && !assignedEmail) return true;
-
-      // Si está asignado a este mismo usuario, puede verlo
-      if (assignedUid && assignedUid === currentUid) return true;
-      if (assignedEmail && assignedEmail === currentEmail) return true;
-
-      // Si está asignado a otro vendedor, no puede verlo
-      return false;
+    if (isRegionalInboxUser) {
+      if (!convIsInMyRegion) return false;
+      return convIsAssignedToMe;
     }
 
-    // Vendedor normal: solo asignados a él
-    if (currentConvMeta.assignedToUid === user.uid) return true;
-
-    return false;
+    return convIsAssignedToMe;
   }, [
     user,
     currentConvMeta,
     isAdmin,
-    isPrivateInboxUser,
-    privateInboxWaPhoneId,
-    currentUid,
-    currentEmail,
+    isRegionalInboxUser,
+    convIsInMyRegion,
+    convIsAssignedToMe,
   ]);
+
+  const shouldShowAssignPanel = useMemo(() => {
+    if (!currentConvMeta || !isRegionalInboxUser) return false;
+    return convIsInMyRegion && convIsUnassigned;
+  }, [currentConvMeta, isRegionalInboxUser, convIsInMyRegion, convIsUnassigned]);
 
   const handleAssignToMe = async () => {
     if (!decoded || !user) return;
@@ -228,6 +196,7 @@ export default function Home() {
       await updateDoc(doc(db, "conversations", decoded), {
         assignedToUid: user.uid,
         assignedToEmail: user.email,
+        assignedToName: user.displayName || user.email || "Agente",
         assignedAt: serverTimestamp(),
       });
     } catch (error) {
@@ -282,7 +251,7 @@ export default function Home() {
       <div className="w-full max-w-md p-6 text-center border shadow-lg bg-base-100 border-base-300 rounded-box">
         <h3 className="mb-2 text-lg font-semibold">Sin acceso</h3>
         <p className="opacity-70">
-          Este chat no pertenece a tu inbox privado o está asignado a otro vendedor.
+          Este chat no pertenece a tu región o está asignado a otro vendedor.
         </p>
       </div>
     </div>
@@ -313,21 +282,13 @@ export default function Home() {
   };
 
   const renderConversationList = () => {
-    if (isPrivateInboxUser) {
-      return (
-        <ConversationsListFernando
-          activeId={currentConvId || ""}
-          onSelect={openConv}
-          title={privateInboxConfig?.label || "Inbox privado"}
-        />
-      );
-    }
-
     return (
       <ConversationsList
         activeId={currentConvId || ""}
         onSelect={openConv}
-        restrictOthers
+        allowedPhoneIds={inboxRegion?.phoneIds || []}
+        allowedEmails={inboxRegion?.emails || []}
+        title={inboxRegion?.label || "Conversaciones"}
       />
     );
   };
@@ -462,10 +423,10 @@ export default function Home() {
                       conversationId={currentConvId}
                       convMeta={currentConvMeta}
                     />
-                  ) : isPrivateInboxUser ? (
-                    renderNoAccessPanel()
-                  ) : (
+                  ) : shouldShowAssignPanel ? (
                     renderAssignPanel()
+                  ) : (
+                    renderNoAccessPanel()
                   )
                 ) : (
                   <div className="flex items-center justify-center flex-1 opacity-60">
@@ -501,10 +462,10 @@ export default function Home() {
                       onBack={() => navigate("/home", { replace: false })}
                       mobile
                     />
-                  ) : isPrivateInboxUser ? (
-                    renderNoAccessPanel()
-                  ) : (
+                  ) : shouldShowAssignPanel ? (
                     renderAssignPanel()
+                  ) : (
+                    renderNoAccessPanel()
                   )
                 ) : (
                   <div className="flex items-center justify-center h-full p-4 text-center opacity-60">

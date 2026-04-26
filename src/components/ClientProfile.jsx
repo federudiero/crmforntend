@@ -7,12 +7,12 @@ import {
 } from "firebase/firestore";
 import { PRESET_LABELS } from "../lib/labels";
 import { useAuthState } from "../hooks/useAuthState.js";
+import { isAdminUser } from "../lib/userAccess.js";
 
 export default function ClientProfile({ contactId: propContactId, conversationId, phone }) {
   const { user } = useAuthState();
-  const isAdmin =
-    !!user?.email &&
-    ["federudiero@gmail.com", "fede_rudiero@gmail.com"].includes(user.email);
+  const [userMeta, setUserMeta] = useState(null);
+  const isAdmin = useMemo(() => isAdminUser({ email: user?.email, profile: userMeta }), [user?.email, userMeta]);
 
   const [assignedToMe, setAssignedToMe] = useState(false);
 
@@ -27,6 +27,23 @@ export default function ClientProfile({ contactId: propContactId, conversationId
   const [labels, setLabels] = useState([]);
   const [notes, setNotes] = useState("");
   const [msgs, setMsgs] = useState([]);
+
+  useEffect(() => {
+    if (!user?.uid) {
+      setUserMeta(null);
+      return;
+    }
+
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, "users", String(user.uid)));
+        setUserMeta(snap.exists() ? snap.data() || {} : {});
+      } catch (e) {
+        console.error("load user meta error:", e);
+        setUserMeta({});
+      }
+    })();
+  }, [user?.uid]);
 
   // Cargar contacto
   useEffect(() => {

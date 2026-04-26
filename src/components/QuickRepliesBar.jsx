@@ -1,5 +1,6 @@
 // src/components/QuickRepliesBar.jsx
 import React, { useEffect, useMemo, useState, useRef } from "react";
+import { createPortal } from "react-dom";
 import { db } from "../firebase";
 import {
   collection,
@@ -24,16 +25,6 @@ import {
   MessageSquarePlus,
 } from "lucide-react";
 
-/**
- * Barra de respuestas rápidas:
- * - Presets locales (siempre)
- * - Globales (colección: quickReplies, campo "ord")
- * - Personales por vendedor (users/{uid}/quickReplies) con modal CRUD
- *
- * Props:
- *  - onPick(text: string)
- *  - compact?: boolean
- */
 export default function QuickRepliesBar({ onPick, compact = false }) {
   const { user } = useAuthState();
   const [globalRows, setGlobalRows] = useState([]);
@@ -51,7 +42,6 @@ export default function QuickRepliesBar({ onPick, compact = false }) {
     []
   );
 
-  // Globales (como ya tenías)
   useEffect(() => {
     (async () => {
       try {
@@ -65,7 +55,6 @@ export default function QuickRepliesBar({ onPick, compact = false }) {
     })();
   }, []);
 
-  // Personales (escucha en vivo)
   useEffect(() => {
     if (!user?.uid) return;
     const base = collection(db, "users", user.uid, "quickReplies");
@@ -84,7 +73,6 @@ export default function QuickRepliesBar({ onPick, compact = false }) {
   const items = useMemo(() => {
     const cloudGlobal = globalRows.map((r) => r.text).filter(Boolean);
     const cloudUser = userRows.map((r) => r.text).filter(Boolean);
-    // Orden: personales → presets → globales (podés cambiar si preferís)
     return [...cloudUser, ...PRESETS, ...cloudGlobal];
   }, [globalRows, userRows, PRESETS]);
 
@@ -99,13 +87,12 @@ export default function QuickRepliesBar({ onPick, compact = false }) {
           " overflow-x-auto whitespace-nowrap pb-1"
         }
       >
-        {/* Chips */}
         <div className="flex gap-2">
           {items.map((t, i) => (
             <button
               key={i}
               type="button"
-              className="text-white rounded-full border btn btn-xs bg-base-200 border-base-300 hover:bg-base-100"
+              className="text-white border rounded-full btn btn-xs bg-base-200 border-base-300 hover:bg-base-100"
               onClick={() => onPick?.(t)}
               title={t}
             >
@@ -114,14 +101,13 @@ export default function QuickRepliesBar({ onPick, compact = false }) {
           ))}
         </div>
 
-        {/* Botón Mis respuestas (CRUD personal) */}
         <button
           type="button"
           className="ml-2 text-black bg-white border btn btn-xs border-base-300 hover:bg-base-100"
           onClick={() => setOpenUserModal(true)}
           title="Administrar tus respuestas"
         >
-          <MessageSquarePlus className="mr-1 w-4 h-4" />
+          <MessageSquarePlus className="w-4 h-4 mr-1" />
           Mis respuestas
         </button>
       </div>
@@ -134,10 +120,6 @@ export default function QuickRepliesBar({ onPick, compact = false }) {
     </>
   );
 }
-
-/* ===========================
-   Modal CRUD (personal por UID)
-   =========================== */
 
 function UserQuickRepliesModal({ open, onClose, onInsert }) {
   const { user } = useAuthState();
@@ -244,17 +226,16 @@ function UserQuickRepliesModal({ open, onClose, onInsert }) {
 
   if (!open) return null;
 
-  return (
+  const modal = (
     <div
-      className="fixed inset-0 z-[99] bg-black/40 grid place-items-center p-4"
+      className="fixed inset-0 z-[150] bg-black/50 grid place-items-center p-4"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-3xl rounded-2xl border shadow-2xl bg-base-100"
+        className="w-full max-w-5xl h-[90vh] min-h-0 rounded-2xl border shadow-2xl bg-base-100 overflow-hidden flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
-        <div className="flex justify-between items-center p-4 border-b">
+        <div className="flex items-center justify-between p-4 border-b">
           <h3 className="text-lg font-semibold">Mis respuestas rápidas</h3>
           <button className="btn btn-ghost btn-sm" onClick={onClose}>
             <X className="w-4 h-4" />
@@ -262,11 +243,9 @@ function UserQuickRepliesModal({ open, onClose, onInsert }) {
           </button>
         </div>
 
-        {/* Body */}
-        <div className="grid grid-cols-1 gap-4 p-4 md:grid-cols-5">
-          {/* Formulario */}
-          <div className="md:col-span-2">
-            <div className="flex justify-between items-center mb-2">
+        <div className="grid flex-1 min-h-0 grid-cols-1 gap-4 p-4 overflow-hidden md:grid-cols-5">
+          <div className="h-full min-h-0 pr-1 overflow-y-auto md:col-span-2 overscroll-contain">
+            <div className="flex items-center justify-between mb-2">
               <h4 className="font-medium">
                 {form.id ? "Editar respuesta" : "Nueva respuesta"}
               </h4>
@@ -275,7 +254,7 @@ function UserQuickRepliesModal({ open, onClose, onInsert }) {
               </button>
             </div>
 
-            <label className="mb-2 w-full form-control">
+            <label className="w-full mb-2 form-control">
               <span className="text-sm label-text">Título</span>
               <input
                 ref={inputTitleRef}
@@ -289,10 +268,10 @@ function UserQuickRepliesModal({ open, onClose, onInsert }) {
               />
             </label>
 
-            <label className="mb-3 w-full form-control">
+            <label className="w-full mb-3 form-control">
               <span className="text-sm label-text">Contenido</span>
               <textarea
-                className="textarea textarea-bordered min-h-[120px]"
+                className="textarea textarea-bordered min-h-[140px] max-h-[38vh]"
                 placeholder="Texto que se insertará en el chat"
                 value={form.text}
                 onChange={(e) =>
@@ -301,13 +280,13 @@ function UserQuickRepliesModal({ open, onClose, onInsert }) {
               />
             </label>
 
-            <div className="flex gap-2">
+            <div className="sticky bottom-0 flex gap-2 py-2 bg-base-100">
               <button
                 className="btn btn-success btn-sm"
                 onClick={save}
                 disabled={saving}
               >
-                <Save className="mr-1 w-4 h-4" />
+                <Save className="w-4 h-4 mr-1" />
                 Guardar
               </button>
               {!!form.id && (
@@ -318,13 +297,12 @@ function UserQuickRepliesModal({ open, onClose, onInsert }) {
             </div>
           </div>
 
-          {/* Listado + búsqueda */}
-          <div className="md:col-span-3">
-            <div className="flex gap-2 items-center mb-3">
+          <div className="flex flex-col h-full min-h-0 overflow-hidden md:col-span-3">
+            <div className="flex items-center gap-2 mb-3 shrink-0">
               <div className="relative flex-1">
                 <Search className="absolute left-2 top-2.5 w-4 h-4 text-gray-500" />
                 <input
-                  className="pl-8 w-full input input-sm input-bordered"
+                  className="w-full pl-8 input input-sm input-bordered"
                   placeholder="Buscar por título o contenido…"
                   value={queryStr}
                   onChange={(e) => setQueryStr(e.target.value)}
@@ -332,11 +310,11 @@ function UserQuickRepliesModal({ open, onClose, onInsert }) {
               </div>
             </div>
 
-            <div className="flex flex-wrap gap-2 mb-3">
+            <div className="flex flex-wrap gap-2 pr-1 mb-3 overflow-y-auto max-h-24 shrink-0 overscroll-contain">
               {filtered.map((it) => (
                 <button
                   key={it.id}
-                  className="px-3 py-1 text-sm bg-white rounded-full border hover:bg-base-200"
+                  className="px-3 py-1 text-sm bg-white border rounded-full hover:bg-base-200"
                   title={it.text}
                   onClick={() => onInsert?.(it.text)}
                 >
@@ -348,13 +326,13 @@ function UserQuickRepliesModal({ open, onClose, onInsert }) {
               )}
             </div>
 
-            <div className="overflow-hidden rounded-xl border">
-              <table className="table table-zebra">
+            <div className="flex-1 min-h-0 overflow-x-hidden overflow-y-auto border rounded-xl overscroll-contain">
+              <table className="table table-fixed table-zebra table-pin-rows">
                 <thead>
                   <tr>
                     <th className="w-40">Título</th>
                     <th>Contenido</th>
-                    <th className="w-28 text-right">Acciones</th>
+                    <th className="text-right w-36">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -374,15 +352,15 @@ function UserQuickRepliesModal({ open, onClose, onInsert }) {
                     filtered.map((it) => (
                       <tr key={it.id}>
                         <td className="align-top">
-                          <div className="font-medium">{it.title}</div>
+                          <div className="font-medium break-words">{it.title}</div>
                         </td>
                         <td className="align-top">
-                          <div className="max-w-[520px] whitespace-pre-wrap break-words">
+                          <div className="pr-1 overflow-y-auto break-words whitespace-pre-wrap max-h-56">
                             {it.text}
                           </div>
                         </td>
                         <td className="align-top">
-                          <div className="flex gap-1 justify-end">
+                          <div className="flex justify-end gap-1">
                             <button
                               className="btn btn-ghost btn-xs"
                               title="Insertar en chat"
@@ -416,9 +394,11 @@ function UserQuickRepliesModal({ open, onClose, onInsert }) {
         </div>
 
         <div className="p-4 text-xs text-gray-500 border-t">
-          Solo vos podés ver/editar estas respuestas. Los admins pueden gestionar si es necesario.
+          Solo vos podés ver y editar estas respuestas.
         </div>
       </div>
     </div>
   );
+
+  return typeof document !== "undefined" ? createPortal(modal, document.body) : modal;
 }

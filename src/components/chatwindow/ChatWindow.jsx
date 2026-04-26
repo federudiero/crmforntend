@@ -373,7 +373,7 @@ export default function ChatWindow({ conversationId, onBack }) {
             const rawWebhookSnapshot = (() => {
                 try {
                     for (const m of msgs) {
-                        if (!isOutgoingMessage(m, user) && m?.raw) return m.raw;
+                        if (!isOutgoingMessage(m, user) && (m?.rawWebhookSnapshot || m?.raw)) return m.rawWebhookSnapshot || m.raw;
                     }
                     return null;
                 } catch {
@@ -385,6 +385,7 @@ export default function ChatWindow({ conversationId, onBack }) {
                 contact,
                 sellerUser,
                 rawWebhookSnapshot,
+                freeText: text,
             });
 
             setSending(true);
@@ -408,7 +409,7 @@ export default function ChatWindow({ conversationId, onBack }) {
 
             const serverConvId = tplRes?.results?.[0]?.to;
             if (serverConvId && serverConvId !== conversationId) {
-                navigate(`/app/${encodeURIComponent(serverConvId)}`, { replace: true });
+                navigate(`/home/${encodeURIComponent(serverConvId)}`, { replace: true });
             }
         } finally {
             setSending(false);
@@ -444,7 +445,7 @@ export default function ChatWindow({ conversationId, onBack }) {
         const rawWebhookSnapshot = (() => {
             try {
                 for (const m of msgs) {
-                    if (!isOutgoingMessage(m, user) && m?.raw) return m.raw;
+                    if (!isOutgoingMessage(m, user) && (m?.rawWebhookSnapshot || m?.raw)) return m.rawWebhookSnapshot || m.raw;
                 }
                 return null;
             } catch {
@@ -471,6 +472,7 @@ export default function ChatWindow({ conversationId, onBack }) {
                         contact,
                         sellerUser,
                         rawWebhookSnapshot,
+                        freeText: body,
                     });
 
                     const tplRes = await sendMessage({
@@ -489,7 +491,7 @@ export default function ChatWindow({ conversationId, onBack }) {
 
                     const serverConvId = tplRes?.results?.[0]?.to;
                     if (serverConvId && serverConvId !== conversationId) {
-                        navigate(`/app/${encodeURIComponent(serverConvId)}`, { replace: true });
+                        navigate(`/home/${encodeURIComponent(serverConvId)}`, { replace: true });
                     }
 
                     if (tplRes?.ok === false) {
@@ -509,7 +511,7 @@ export default function ChatWindow({ conversationId, onBack }) {
 
                     const serverConvId = textRes?.results?.[0]?.to;
                     if (serverConvId && serverConvId !== conversationId) {
-                        navigate(`/app/${encodeURIComponent(serverConvId)}`, { replace: true });
+                        navigate(`/home/${encodeURIComponent(serverConvId)}`, { replace: true });
                     }
                     if (textRes?.ok === false) {
                         const code = textRes?.results?.[0]?.error?.error?.code || textRes?.results?.[0]?.error?.code;
@@ -770,7 +772,7 @@ export default function ChatWindow({ conversationId, onBack }) {
 
             <ImagePreviewModal url={imagePreviewUrl} onClose={() => setImagePreviewUrl(null)} />
 
-            <TagsModal open={showTags} onClose={() => setShowTags(false)} tagsData={tagsData} onPick={toggleLabel} />
+            <TagsModal open={showTags} onClose={() => setShowTags(false)} tagsData={tagsData} selectedSlugs={convSlugs} onPick={toggleLabel} />
 
             <CombosModal
                 open={showCombos}
